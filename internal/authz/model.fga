@@ -15,147 +15,73 @@
 model
   schema 1.1
 
-<<<<<<< HEAD
-type user
-type service_account
-=======
 # Unified Principal Identity (human users, machine service accounts, SPIFFE workload identities)
 type user
->>>>>>> main
+
+# Physical host node running atelet
+type node
+
+# Worker pod running ateom
+type worker
+  relations
+    define host_node: [node]
 
 # Global Cluster Scope
 type cluster
   relations
-<<<<<<< HEAD
-    define admin: [user, service_account]
+    define owner: [user]
+    define can_create_atespace: owner
 
 type atespace
   relations
-    # Optional link to cluster-wide root cluster
     define parent_cluster: [cluster]
 
-    # Standard 3-tier hierarchy: admin -> developer -> viewer
-    define admin: [user, service_account] or admin from parent_cluster
+    # --- 1. Aligned 3-Tier Roles ---
+    # Cluster owner automatically inherits owner without explicit per-atespace tuples
+    define owner: [user] or owner from parent_cluster
+    define editor: [user] or owner
+    define viewer: [user, user:*] or editor
 
-    define developer: [user, service_account] or admin
-    define viewer: [user, service_account] or developer
+    # --- 2. Policy Governance (SetPolicy / GetPolicy) ---
+    define can_set_policy: owner
+    define can_get_policy: viewer
 
-    # Action Permission: Who can create new actor instances in this atespace
-    define can_create_actor: developer
+    # --- 3. Atespace Lifecycle & Container Operations ---
+    define can_create_actor: editor
+    define can_create_actor_template: editor
+    define can_get: viewer
+    define can_update: editor
+    define can_delete: owner
 
 type actor_template
   relations
-    # Parent Container workspace where template definition lives
     define parent_atespace: [atespace]
 
-    # Creator of this template definition
-    define creator: [user, service_account]
-
-    # Template maintainers (full update/delete control over template)
-    define operator: creator or developer from parent_atespace
-
-    # Read-only inspection of template metadata
-    define viewer: operator or viewer from parent_atespace
-
-    # Who can instantiate actors from this template (supports wildcards like user:*)
-    define can_instantiate: [user, user:*, service_account, service_account:*] or viewer
+    # Policy stops at atespace: No direct per-user template bindings
+    define can_get: viewer from parent_atespace
+    define can_update: editor from parent_atespace
+    define can_delete: editor from parent_atespace
 
 type actor
   relations
-    # Parent Container workspace where runtime instance lives
     define parent_atespace: [atespace]
 
-    # Actor Template from which this instance was initialized
-    define template: [actor_template]
+    # --- Dynamic Infrastructure Scheduling Graph ---
+    define scheduled_worker: [worker]
+    define host_node: host_node from scheduled_worker
 
-    # Creator of this specific actor instance
-    define creator: [user, service_account]
+    # --- User-Facing Operations (Inherited from Atespace) ---
+    define can_get: viewer from parent_atespace
+    define can_update: editor from parent_atespace
+    define can_delete: editor from parent_atespace
 
-    # Full Lifecycle Control (pause, destroy, mint_token)
-    define operator: creator or developer from parent_atespace
+    # --- Hardened System & Infrastructure Operations ---
 
-    # Control-Plane Lifecycle Wakeup: Infrastructure router service accounts OR lifecycle operators
-    define can_resume: [service_account] or operator
+    # Node Restriction: Only the node hosting the scheduled worker can mint tokens
+    define can_mint_credential: host_node
 
-    # Data-Plane Network Traffic Routing / Execution: End users, router proxy, or peer actors
-    define can_invoke: [user, user:*, service_account, service_account:*, actor] or operator
+    # Data Plane Ingress: Routers (or editors) can resume
+    define can_resume: [user] or editor from parent_atespace
 
-    # Instance Inspection (metadata, status, details)
-    define can_get: operator or viewer from parent_atespace
-
-    # Instance Mutation & Destruction
-    define can_update: operator
-    define can_delete: operator
-
-    # Idle Self-Suspend (operators OR self-referential actor matching)
-    define can_suspend: [actor with is_self_actor] or operator
-
-
-    # Protected Metadata / Label Updates
-    # System labels require admin; standard labels require operator/user + label policy check
-    define can_update_protected_label: admin from parent_atespace
-    define can_update_standard_label: [user with is_standard_label, user:* with is_standard_label, service_account with is_standard_label, service_account:* with is_standard_label] and operator
-    define can_update_label: can_update_protected_label or can_update_standard_label
-
-
-# Conditions
-condition is_standard_label(label_key: string) {
-  !label_key.startsWith("substrate.ate.dev/") && !label_key.startsWith("security/")
-}
-
-condition is_self_actor(target_actor: string, calling_actor: string) {
-  target_actor == calling_actor
-}
-=======
-    define admin: [user]
-    define can_create_atespace: admin
-
-type atespace
-  relations
-    # Link to cluster-wide root cluster
-    define parent_cluster: [cluster]
-
-    # Standard 3-tier hierarchy: admin -> developer -> viewer
-    define admin: [user] or admin from parent_cluster
-    define developer: [user] or admin
-    define viewer: [user] or developer
-
-    # Atespace Operations
-    define can_get: viewer
-    define can_update: developer
-    define can_delete: admin
-
-type actor_template
-  relations
-    # Parent atespace where template definition lives
-    define parent_atespace: [atespace]
-
-    # Standard roles: developer (creator/maintainer) and viewer (users/public wildcards user:*)
-    define developer: [user] or developer from parent_atespace
-    define viewer: [user, user:*] or developer or viewer from parent_atespace
-
-    # Actor Template Operations
-    define can_get: viewer
-    define can_update: developer
-    define can_delete: developer
-
-type actor
-  relations
-    # Parent atespace where runtime instance lives
-    define parent_atespace: [atespace]
-
-    # Standard roles on actor instance
-    define developer: [user] or developer from parent_atespace
-    define viewer: [user] or developer or viewer from parent_atespace
-    define invoker: [user, user:*] or developer
-
-    # Resource Operations
-    define can_get: viewer
-    define can_update: developer
-    define can_delete: developer
-
-    # Substrate Specific Lifecycle & Ingress Operations
-    define can_resume: [user] or developer
-    define can_invoke: invoker
-    define can_suspend: [user] or developer
->>>>>>> main
+    # Lifecycle Operations
+    define can_suspend: [user] or editor from parent_atespace
