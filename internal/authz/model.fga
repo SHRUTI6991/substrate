@@ -14,6 +14,10 @@
 
 model
   schema 1.1
+# Naming Conventions:
+# - Roles and graph edges are nouns (e.g. owner, editor, viewer, parent_cluster, host_node).
+# - Permission checks evaluated at runtime must start with the 'can_' prefix
+#   (e.g. can_get, can_set_policy, can_create_actor).
 
 # Unified Principal Identity (human users, machine service accounts, SPIFFE workload identities)
 type user
@@ -26,11 +30,14 @@ type worker
   relations
     define host_node: [node]
 
-# Global Cluster Scope
+# Global Cluster Scope (singleton: there will only ever be one instance, e.g. 'cluster:root')
 type cluster
   relations
     define owner: [user]
+    define viewer: [user] or owner
+
     define can_create_atespace: owner
+    define can_get: viewer
 
 type atespace
   relations
@@ -40,7 +47,7 @@ type atespace
     # Cluster owner automatically inherits owner without explicit per-atespace tuples
     define owner: [user] or owner from parent_cluster
     define editor: [user] or owner
-    define viewer: [user, user:*] or editor
+    define viewer: [user] or editor or viewer from parent_cluster
 
     # --- 2. Policy Governance (SetPolicy / GetPolicy) ---
     define can_set_policy: owner
@@ -77,8 +84,8 @@ type actor
 
     # --- Hardened System & Infrastructure Operations ---
 
-    # Node Restriction: Only the node hosting the scheduled worker can mint tokens
-    define can_mint_credential: host_node
+    # Node Restriction: Only the node hosting the scheduled worker can mint ateom actor credentials
+    define can_mint_ateom_actor_credential: host_node
 
     # Data Plane Ingress: Routers (or editors) can resume
     define can_resume: [user] or editor from parent_atespace
