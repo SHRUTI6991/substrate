@@ -65,6 +65,8 @@ const (
 	Control_GetActorTemplate_FullMethodName           = "/ateapi.Control/GetActorTemplate"
 	Control_ListActorTemplates_FullMethodName         = "/ateapi.Control/ListActorTemplates"
 	Control_DeleteActorTemplate_FullMethodName        = "/ateapi.Control/DeleteActorTemplate"
+	Control_GetPolicy_FullMethodName                  = "/ateapi.Control/GetPolicy"
+	Control_SetPolicy_FullMethodName                  = "/ateapi.Control/SetPolicy"
 )
 
 // ControlClient is the client API for Control service.
@@ -145,6 +147,21 @@ type ControlClient interface {
 	// Delete an ActorTemplate together with its golden actor and golden
 	// snapshot in the ActorTemplate's namespace.
 	DeleteActorTemplate(ctx context.Context, in *DeleteActorTemplateRequest, opts ...grpc.CallOption) (*ActorTemplate, error)
+	// GetPolicy retrieves the access control policy for a resource (e.g. "atespaces/{name}").
+	//
+	// Returns the current Policy containing role bindings and an etag fingerprint.
+	// Returns NOT_FOUND if the resource does not exist. If the resource exists
+	// but has no explicit policy set, returns a Policy with an empty bindings list
+	// and the current etag.
+	GetPolicy(ctx context.Context, in *GetPolicyRequest, opts ...grpc.CallOption) (*Policy, error)
+	// SetPolicy overwrites the access control policy for a resource.
+	//
+	// Replaces the entire policy on the target resource with the provided policy.
+	// Implements optimistic concurrency control via policy.etag: if etag is provided
+	// and does not match the server's current etag, the write is rejected with
+	// ABORTED. If etag is omitted, the policy is updated unconditionally.
+	// Returns NOT_FOUND if the target resource does not exist.
+	SetPolicy(ctx context.Context, in *SetPolicyRequest, opts ...grpc.CallOption) (*Policy, error)
 }
 
 type controlClient struct {
@@ -475,6 +492,26 @@ func (c *controlClient) DeleteActorTemplate(ctx context.Context, in *DeleteActor
 	return out, nil
 }
 
+func (c *controlClient) GetPolicy(ctx context.Context, in *GetPolicyRequest, opts ...grpc.CallOption) (*Policy, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Policy)
+	err := c.cc.Invoke(ctx, Control_GetPolicy_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) SetPolicy(ctx context.Context, in *SetPolicyRequest, opts ...grpc.CallOption) (*Policy, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Policy)
+	err := c.cc.Invoke(ctx, Control_SetPolicy_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ControlServer is the server API for Control service.
 // All implementations must embed UnimplementedControlServer
 // for forward compatibility.
@@ -553,6 +590,21 @@ type ControlServer interface {
 	// Delete an ActorTemplate together with its golden actor and golden
 	// snapshot in the ActorTemplate's namespace.
 	DeleteActorTemplate(context.Context, *DeleteActorTemplateRequest) (*ActorTemplate, error)
+	// GetPolicy retrieves the access control policy for a resource (e.g. "atespaces/{name}").
+	//
+	// Returns the current Policy containing role bindings and an etag fingerprint.
+	// Returns NOT_FOUND if the resource does not exist. If the resource exists
+	// but has no explicit policy set, returns a Policy with an empty bindings list
+	// and the current etag.
+	GetPolicy(context.Context, *GetPolicyRequest) (*Policy, error)
+	// SetPolicy overwrites the access control policy for a resource.
+	//
+	// Replaces the entire policy on the target resource with the provided policy.
+	// Implements optimistic concurrency control via policy.etag: if etag is provided
+	// and does not match the server's current etag, the write is rejected with
+	// ABORTED. If etag is omitted, the policy is updated unconditionally.
+	// Returns NOT_FOUND if the target resource does not exist.
+	SetPolicy(context.Context, *SetPolicyRequest) (*Policy, error)
 	mustEmbedUnimplementedControlServer()
 }
 
@@ -658,6 +710,12 @@ func (UnimplementedControlServer) ListActorTemplates(context.Context, *ListActor
 }
 func (UnimplementedControlServer) DeleteActorTemplate(context.Context, *DeleteActorTemplateRequest) (*ActorTemplate, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeleteActorTemplate not implemented")
+}
+func (UnimplementedControlServer) GetPolicy(context.Context, *GetPolicyRequest) (*Policy, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetPolicy not implemented")
+}
+func (UnimplementedControlServer) SetPolicy(context.Context, *SetPolicyRequest) (*Policy, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetPolicy not implemented")
 }
 func (UnimplementedControlServer) mustEmbedUnimplementedControlServer() {}
 func (UnimplementedControlServer) testEmbeddedByValue()                 {}
@@ -1256,6 +1314,42 @@ func _Control_DeleteActorTemplate_Handler(srv interface{}, ctx context.Context, 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Control_GetPolicy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetPolicyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).GetPolicy(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_GetPolicy_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).GetPolicy(ctx, req.(*GetPolicyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_SetPolicy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetPolicyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).SetPolicy(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_SetPolicy_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).SetPolicy(ctx, req.(*SetPolicyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // Control_ServiceDesc is the grpc.ServiceDesc for Control service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1390,6 +1484,14 @@ var Control_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DeleteActorTemplate",
 			Handler:    _Control_DeleteActorTemplate_Handler,
+		},
+		{
+			MethodName: "GetPolicy",
+			Handler:    _Control_GetPolicy_Handler,
+		},
+		{
+			MethodName: "SetPolicy",
+			Handler:    _Control_SetPolicy_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

@@ -209,6 +209,16 @@ class ControlStub:
                 request_serializer=ateapi__pb2.DeleteActorTemplateRequest.SerializeToString,
                 response_deserializer=ateapi__pb2.ActorTemplate.FromString,
                 _registered_method=True)
+        self.GetPolicy = channel.unary_unary(
+                '/ateapi.Control/GetPolicy',
+                request_serializer=ateapi__pb2.GetPolicyRequest.SerializeToString,
+                response_deserializer=ateapi__pb2.Policy.FromString,
+                _registered_method=True)
+        self.SetPolicy = channel.unary_unary(
+                '/ateapi.Control/SetPolicy',
+                request_serializer=ateapi__pb2.SetPolicyRequest.SerializeToString,
+                response_deserializer=ateapi__pb2.Policy.FromString,
+                _registered_method=True)
 
 
 class ControlServicer:
@@ -447,6 +457,31 @@ class ControlServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def GetPolicy(self, request, context):
+        """GetPolicy retrieves the access control policy for a resource (e.g. "atespaces/{name}").
+
+        Returns the current Policy containing role bindings and an etag fingerprint.
+        Returns NOT_FOUND if the resource does not exist. If the resource exists
+        but has no explicit policy set, returns a Policy with an empty bindings list
+        and the current etag.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def SetPolicy(self, request, context):
+        """SetPolicy overwrites the access control policy for a resource.
+
+        Replaces the entire policy on the target resource with the provided policy.
+        Implements optimistic concurrency control via policy.etag: if etag is provided
+        and does not match the server's current etag, the write is rejected with
+        ABORTED. If etag is omitted, the policy is updated unconditionally.
+        Returns NOT_FOUND if the target resource does not exist.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_ControlServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -609,6 +644,16 @@ def add_ControlServicer_to_server(servicer, server):
                     servicer.DeleteActorTemplate,
                     request_deserializer=ateapi__pb2.DeleteActorTemplateRequest.FromString,
                     response_serializer=ateapi__pb2.ActorTemplate.SerializeToString,
+            ),
+            'GetPolicy': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetPolicy,
+                    request_deserializer=ateapi__pb2.GetPolicyRequest.FromString,
+                    response_serializer=ateapi__pb2.Policy.SerializeToString,
+            ),
+            'SetPolicy': grpc.unary_unary_rpc_method_handler(
+                    servicer.SetPolicy,
+                    request_deserializer=ateapi__pb2.SetPolicyRequest.FromString,
+                    response_serializer=ateapi__pb2.Policy.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -1476,6 +1521,60 @@ class Control:
             '/ateapi.Control/DeleteActorTemplate',
             ateapi__pb2.DeleteActorTemplateRequest.SerializeToString,
             ateapi__pb2.ActorTemplate.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetPolicy(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/ateapi.Control/GetPolicy',
+            ateapi__pb2.GetPolicyRequest.SerializeToString,
+            ateapi__pb2.Policy.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def SetPolicy(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/ateapi.Control/SetPolicy',
+            ateapi__pb2.SetPolicyRequest.SerializeToString,
+            ateapi__pb2.Policy.FromString,
             options,
             channel_credentials,
             insecure,

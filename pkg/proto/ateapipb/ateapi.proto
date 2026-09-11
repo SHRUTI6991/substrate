@@ -126,6 +126,23 @@ service Control {
   // Delete an ActorTemplate together with its golden actor and golden
   // snapshot in the ActorTemplate's namespace.
   rpc DeleteActorTemplate(DeleteActorTemplateRequest) returns (ActorTemplate) {}
+
+  // GetPolicy retrieves the access control policy for a resource (e.g. "atespaces/{name}").
+  //
+  // Returns the current Policy containing role bindings and an etag fingerprint.
+  // Returns NOT_FOUND if the resource does not exist. If the resource exists
+  // but has no explicit policy set, returns a Policy with an empty bindings list
+  // and the current etag.
+  rpc GetPolicy(GetPolicyRequest) returns (Policy) {}
+
+  // SetPolicy overwrites the access control policy for a resource.
+  //
+  // Replaces the entire policy on the target resource with the provided policy.
+  // Implements optimistic concurrency control via policy.etag: if etag is provided
+  // and does not match the server's current etag, the write is rejected with
+  // ABORTED. If etag is omitted, the policy is updated unconditionally.
+  // Returns NOT_FOUND if the target resource does not exist.
+  rpc SetPolicy(SetPolicyRequest) returns (Policy) {}
 }
 
 // ExternalSnapshot addresses a snapshot held in object storage.
@@ -1253,6 +1270,76 @@ message DeleteAtespaceRequest {
   // +k8s:required
   // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
   ObjectRef atespace = 1;
+}
+
+// GetPolicyRequest requests the access control policy for a resource.
+message GetPolicyRequest {
+  // The resource for which the policy is being requested (e.g. "atespaces/team-a", "clusters/root").
+  //
+  // +k8s:required
+  string resource = 1;
+}
+
+// SetPolicyRequest sets the access control policy for a resource.
+message SetPolicyRequest {
+  // The resource for which the policy is being set (e.g. "atespaces/team-a", "clusters/root").
+  //
+  // +k8s:required
+  string resource = 1;
+
+  // The policy to set.
+  //
+  // +k8s:required
+  Policy policy = 2;
+}
+
+// Policy represents the access control policy for a resource.
+message Policy {
+  // The resource this policy applies to (e.g. "atespaces/team-a", "clusters/root").
+  //
+  // +k8s:required
+  string resource = 1;
+
+  // Optimistic concurrency control fingerprint.
+  //
+  // +k8s:optional
+  string etag = 2;
+
+  // The list of role bindings that grant permissions on the resource.
+  //
+  // +k8s:optional
+  repeated Binding bindings = 3;
+}
+
+// Binding binds a role to a set of principal members.
+message Binding {
+  // The role name (e.g. "roles/owner", "roles/editor", "roles/viewer").
+  //
+  // +k8s:required
+  string role = 1;
+
+  // The list of subjects (e.g. "user:alice@example.com", "serviceAccount:...").
+  //
+  // +k8s:optional
+  repeated string members = 2;
+
+  // Optional condition under which this binding is active.
+  //
+  // +k8s:optional
+  Condition condition = 3;
+}
+
+// Condition represents an attribute-based condition expression.
+message Condition {
+  // Short title or identifier for the condition.
+  //
+  // +k8s:optional
+  string title = 1;
+
+  // Textual expression (e.g. CEL expression).
+  //
+  // +k8s:optional
+  string expression = 2;
 }
 
 message CreateActorTemplateRequest {
