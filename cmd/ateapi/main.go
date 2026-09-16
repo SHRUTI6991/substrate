@@ -36,6 +36,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workerservice"
 	"github.com/agent-substrate/substrate/internal/ateapiauth"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
+	"github.com/agent-substrate/substrate/internal/authz"
 	"github.com/agent-substrate/substrate/internal/credbundle"
 	"github.com/agent-substrate/substrate/internal/localca"
 	"github.com/agent-substrate/substrate/internal/localjwtauthority"
@@ -140,6 +141,14 @@ func main() {
 	// (atepg's outbox maintenance loop); stop it on shutdown.
 	if closer, ok := persistence.(interface{ Close() }); ok {
 		defer closer.Close()
+	}
+
+	if poolProvider, ok := persistence.(interface{ Pool() *pgxpool.Pool }); ok {
+		authzSrv, err := authz.NewServer(shutdownCtx, poolProvider.Pool())
+		if err != nil {
+			serverboot.Fatal(ctx, "Failed to initialize OpenFGA authorization server", err)
+		}
+		defer authzSrv.Close()
 	}
 
 	clientset, ateClient, err := newKubeClients()
