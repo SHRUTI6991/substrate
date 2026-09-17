@@ -77,6 +77,7 @@ tests:
           owner: true
           viewer: true
           can_create_atespace: true
+          can_list_atespaces: true
           can_set_policy: true
           can_get_policy: true
           can_get: true
@@ -101,6 +102,7 @@ tests:
           owner: false
           viewer: true
           can_create_atespace: false
+          can_list_atespaces: true
           can_set_policy: false
           can_get_policy: true
           can_get: true

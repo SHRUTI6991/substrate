@@ -21,6 +21,7 @@ import (
 	"io/fs"
 	"log/slog"
 
+	"github.com/agent-substrate/substrate/internal/principal"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
 	openfgav1 "github.com/openfga/api/proto/openfga/v1"
@@ -32,8 +33,11 @@ import (
 	"github.com/openfga/openfga/pkg/storage/sqlcommon"
 	"github.com/pressly/goose/v3"
 	"github.com/pressly/goose/v3/lock"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/wrapperspb"
+	"strings"
 )
 
 const (
@@ -43,7 +47,52 @@ const (
 	// migrationTableName tracks OpenFGA schema migrations separately from
 	// Substrate's own schema_migrations table.
 	migrationTableName = "goose_db_version"
+
+	// GlobalRootObject is the singleton global scope object identifier in OpenFGA.
+	GlobalRootObject = "global:root"
+
+	RelationCanCreateAtespace = "can_create_atespace"
+	RelationCanListAtespaces  = "can_list_atespaces"
+	RelationCanGet            = "can_get"
+	RelationCanUpdate         = "can_update"
+	RelationCanDelete         = "can_delete"
+	RelationCanSetPolicy      = "can_set_policy"
 )
+
+type bypassKey struct{}
+
+// WithBypass returns a context that bypasses runtime authorization checks (for internal system reconcilers).
+func WithBypass(ctx context.Context) context.Context {
+	return context.WithValue(ctx, bypassKey{}, true)
+}
+
+// IsBypassed reports whether ctx has authorization checks bypassed.
+func IsBypassed(ctx context.Context) bool {
+	v, _ := ctx.Value(bypassKey{}).(bool)
+	return v
+}
+
+var tupleReplacer = strings.NewReplacer(
+	"%", "%25",
+	":", "%3A",
+	"#", "%23",
+	" ", "%20",
+	"*", "%2A",
+)
+
+// AtespaceObject formats an atespace name as an OpenFGA object string.
+func AtespaceObject(name string) string {
+	return "atespace:" + tupleReplacer.Replace(name)
+}
+
+// FormatUser formats a principal ID as a valid OpenFGA user string.
+// OpenFGA disallows ':', '#', whitespace, and treats '*' as a public wildcard;
+// these characters (plus '%') are percent-encoded to prevent collisions and
+// wildcard injection while preserving '/', '@', '.', '-', and '_'.
+func FormatUser(id string) string {
+	id = strings.TrimPrefix(id, "user:")
+	return "user:" + tupleReplacer.Replace(id)
+}
 
 //go:embed model.fga
 var modelDSL string
@@ -137,6 +186,228 @@ func (s *Server) Close() {
 	if s.datastore != nil {
 		s.datastore.Close()
 	}
+}
+
+func (s *Server) checkRaw(ctx context.Context, user, relation, object string) (bool, error) {
+	resp, err := s.fgaServer.Check(ctx, &openfgav1.CheckRequest{
+		StoreId:              s.storeID,
+		AuthorizationModelId: s.modelID,
+		TupleKey: &openfgav1.CheckRequestTupleKey{
+			User:     user,
+			Relation: relation,
+			Object:   object,
+		},
+	})
+	if err != nil {
+		return false, status.Errorf(codes.Internal, "authz check failed: %v", err)
+	}
+	return resp.GetAllowed(), nil
+}
+
+// CheckPermission verifies that the principal in ctx has relation on object.
+// For atespace:<name> objects that do not yet have a parent_global link in OpenFGA
+// (e.g. nonexistent or already-deleted atespaces), callers who hold the corresponding
+// global permission on global:root are allowed through so the storage layer can return
+// codes.NotFound (or self-heal the tuple if the atespace exists).
+func (s *Server) CheckPermission(ctx context.Context, relation, object string) error {
+	if s == nil || IsBypassed(ctx) {
+		return nil
+	}
+	p, ok := principal.FromContext(ctx)
+	if !ok || p.ID == "" {
+		return status.Error(codes.Unauthenticated, "unauthenticated: missing principal in context")
+	}
+	user := FormatUser(p.ID)
+	allowed, err := s.checkRaw(ctx, user, relation, object)
+	if err != nil {
+		return err
+	}
+	if allowed {
+		return nil
+	}
+
+	if strings.HasPrefix(object, "atespace:") {
+		var globalRel string
+		switch relation {
+		case RelationCanGet:
+			globalRel = RelationCanGet
+		case RelationCanUpdate, RelationCanDelete, RelationCanSetPolicy:
+			globalRel = RelationCanCreateAtespace
+		}
+		if globalRel != "" {
+			globalAllowed, gErr := s.checkRaw(ctx, user, globalRel, GlobalRootObject)
+			if gErr == nil && globalAllowed {
+				return nil
+			}
+		}
+	}
+
+	return status.Errorf(codes.PermissionDenied, "permission denied: principal %q lacks %q on %q", user, relation, object)
+}
+
+// ListAccessibleAtespaces determines whether the caller in ctx can list all atespaces
+// (via can_list_atespaces on global:root) or returns the set of specific atespace
+// objects ("atespace:<name>") on which the caller has can_get permission.
+// If the caller has neither global list permission nor access to any atespace,
+// it returns codes.PermissionDenied.
+func (s *Server) ListAccessibleAtespaces(ctx context.Context) (all bool, allowedObjects map[string]bool, err error) {
+	if s == nil || IsBypassed(ctx) {
+		return true, nil, nil
+	}
+	p, ok := principal.FromContext(ctx)
+	if !ok || p.ID == "" {
+		return false, nil, status.Error(codes.Unauthenticated, "unauthenticated: missing principal in context")
+	}
+	user := FormatUser(p.ID)
+
+	canListAll, err := s.checkRaw(ctx, user, RelationCanListAtespaces, GlobalRootObject)
+	if err != nil {
+		return false, nil, err
+	}
+	if canListAll {
+		return true, nil, nil
+	}
+
+	listResp, err := s.fgaServer.ListObjects(ctx, &openfgav1.ListObjectsRequest{
+		StoreId:              s.storeID,
+		AuthorizationModelId: s.modelID,
+		User:                 user,
+		Relation:             RelationCanGet,
+		Type:                 "atespace",
+	})
+	if err != nil {
+		return false, nil, status.Errorf(codes.Internal, "authz list objects failed: %v", err)
+	}
+	objs := listResp.GetObjects()
+	if len(objs) == 0 {
+		return false, nil, status.Errorf(codes.PermissionDenied, "permission denied: principal %q lacks %q on %q and has no accessible atespaces", user, RelationCanListAtespaces, GlobalRootObject)
+	}
+	allowedObjects = make(map[string]bool, len(objs))
+	for _, o := range objs {
+		allowedObjects[o] = true
+	}
+	return false, allowedObjects, nil
+}
+
+// EnsureParentGlobal idempotently writes the parent_global: global:root tuple for name
+// without deleting any existing tuples on the atespace.
+func (s *Server) EnsureParentGlobal(ctx context.Context, name string) error {
+	if s == nil {
+		return nil
+	}
+	_, err := s.fgaServer.Write(ctx, &openfgav1.WriteRequest{
+		StoreId:              s.storeID,
+		AuthorizationModelId: s.modelID,
+		Writes: &openfgav1.WriteRequestWrites{
+			TupleKeys: []*openfgav1.TupleKey{
+				{
+					User:     GlobalRootObject,
+					Relation: "parent_global",
+					Object:   AtespaceObject(name),
+				},
+			},
+			OnDuplicate: "ignore",
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("writing parent_global tuple for atespace %q: %w", name, err)
+	}
+	return nil
+}
+
+// OnCreateAtespace purges any stale tuples for name from prior lifecycles and links
+// the newly created atespace to global:root in OpenFGA.
+func (s *Server) OnCreateAtespace(ctx context.Context, name string) error {
+	if s == nil {
+		return nil
+	}
+	if err := s.OnDeleteAtespace(ctx, name); err != nil {
+		return fmt.Errorf("purging stale tuples before creating atespace %q: %w", name, err)
+	}
+	return s.EnsureParentGlobal(ctx, name)
+}
+
+// BootstrapGlobalOwners idempotently grants the 'owner' relation on 'global:root'
+// to each non-empty principal ID in owners.
+func (s *Server) BootstrapGlobalOwners(ctx context.Context, owners []string) error {
+	if s == nil || len(owners) == 0 {
+		return nil
+	}
+	var keys []*openfgav1.TupleKey
+	for _, owner := range owners {
+		owner = strings.TrimSpace(owner)
+		if owner == "" {
+			continue
+		}
+		keys = append(keys, &openfgav1.TupleKey{
+			User:     FormatUser(owner),
+			Relation: "owner",
+			Object:   GlobalRootObject,
+		})
+	}
+	if len(keys) == 0 {
+		return nil
+	}
+	_, err := s.fgaServer.Write(ctx, &openfgav1.WriteRequest{
+		StoreId:              s.storeID,
+		AuthorizationModelId: s.modelID,
+		Writes: &openfgav1.WriteRequestWrites{
+			TupleKeys:   keys,
+			OnDuplicate: "ignore",
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("bootstrapping global owners in OpenFGA: %w", err)
+	}
+	return nil
+}
+
+// OnDeleteAtespace removes all tuples associated with a deleted atespace in OpenFGA.
+func (s *Server) OnDeleteAtespace(ctx context.Context, name string) error {
+	if s == nil {
+		return nil
+	}
+	obj := AtespaceObject(name)
+	var toDelete []*openfgav1.TupleKeyWithoutCondition
+	var contToken string
+	for {
+		readResp, err := s.fgaServer.Read(ctx, &openfgav1.ReadRequest{
+			StoreId:           s.storeID,
+			TupleKey:          &openfgav1.ReadRequestTupleKey{Object: obj},
+			ContinuationToken: contToken,
+		})
+		if err != nil {
+			return fmt.Errorf("reading tuples for deleted atespace %q: %w", name, err)
+		}
+		for _, t := range readResp.GetTuples() {
+			if tk := t.GetKey(); tk != nil {
+				toDelete = append(toDelete, &openfgav1.TupleKeyWithoutCondition{
+					User:     tk.GetUser(),
+					Relation: tk.GetRelation(),
+					Object:   tk.GetObject(),
+				})
+			}
+		}
+		if readResp.GetContinuationToken() == "" {
+			break
+		}
+		contToken = readResp.GetContinuationToken()
+	}
+	if len(toDelete) == 0 {
+		return nil
+	}
+	_, err := s.fgaServer.Write(ctx, &openfgav1.WriteRequest{
+		StoreId:              s.storeID,
+		AuthorizationModelId: s.modelID,
+		Deletes: &openfgav1.WriteRequestDeletes{
+			TupleKeys: toDelete,
+			OnMissing: "ignore",
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("deleting tuples for atespace %q: %w", name, err)
+	}
+	return nil
 }
 
 // ateFGAInitLockID is a 64-bit identifier ("atefga") for serializing
