@@ -76,7 +76,7 @@ var (
 	authenticationConfigFile = pflag.String("authentication-config", "", "YAML file configuring trusted JWT providers.")
 	postgresConnectionString = pflag.String("postgres-connection-string", "", "PostgreSQL connection string (libpq DSN or URI).")
 	postgresSchema           = pflag.String("postgres-schema", "public", "PostgreSQL schema for Substrate tables. This overrides a search_path connection parameter.")
-	enableAuthz              = pflag.Bool("enable-authz", false, "Enable OpenFGA authorization checks.")
+	experimentalEnableAuthz  = pflag.Bool("experimental-enable-authz", false, "Enable OpenFGA authorization checks (experimental).")
 
 	actorIDJWTPoolFile   = pflag.String("actor-id-jwt-pool", "", "The file that contains the serialized JWT authority pool for signing actor JWTs")
 	actorJWTIssuer       = pflag.String("actor-jwt-issuer", "", "Issuer URL placed in the iss claim of actor JWTs. Relying parties fetch <issuer>/.well-known/openid-configuration to verify them. Must be https with no query or fragment. Empty means https://"+installdefaults.IDPServiceName+".<pod namespace>.svc.")
@@ -172,7 +172,7 @@ func main() {
 	defer persistence.Close()
 
 	var authorizer *authz.Authorizer
-	if *enableAuthz {
+	if *experimentalEnableAuthz {
 		fgaServer, err := authz.NewOpenFGAServer(pool)
 		if err != nil {
 			serverboot.Fatal(ctx, "Failed to create OpenFGA server", err)
@@ -296,7 +296,7 @@ func main() {
 	unaryInterceptors := []grpc.UnaryServerInterceptor{
 		apiauthn.UnaryServerInterceptor(authCfg),
 	}
-	if *enableAuthz {
+	if *experimentalEnableAuthz {
 		unaryInterceptors = append(unaryInterceptors, authz.UnaryServerInterceptor(authorizer))
 	}
 	unaryInterceptors = append(unaryInterceptors,
@@ -382,8 +382,8 @@ func loadFlagsFromEnv() {
 			*o.flag = os.Getenv(o.env)
 		}
 	}
-	if v := os.Getenv("ATE_API_ENABLE_AUTHZ"); v != "" && !pflag.CommandLine.Changed("enable-authz") {
-		*enableAuthz = (v == "true" || v == "1")
+	if v := os.Getenv("ATE_API_EXPERIMENTAL_ENABLE_AUTHZ"); v != "" && !pflag.CommandLine.Changed("experimental-enable-authz") {
+		*experimentalEnableAuthz = (v == "true" || v == "1")
 	}
 }
 
@@ -394,7 +394,7 @@ func logFlagValues(ctx context.Context) {
 		slog.String("authentication-config", *authenticationConfigFile),
 		slog.String("postgres-connection-string", *postgresConnectionString),
 		slog.String("postgres-schema", *postgresSchema),
-		slog.Bool("enable-authz", *enableAuthz),
+		slog.Bool("experimental-enable-authz", *experimentalEnableAuthz),
 		slog.String("actor-id-jwt-pool", *actorIDJWTPoolFile),
 		slog.String("actor-jwt-issuer", *actorJWTIssuer),
 		slog.String("actor-id-ca-pool", *actorIDCAPoolFile),
