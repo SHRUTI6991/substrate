@@ -295,13 +295,13 @@ func main() {
 
 	unaryInterceptors := []grpc.UnaryServerInterceptor{
 		apiauthn.UnaryServerInterceptor(authCfg),
+		ateinterceptors.MaxDeadlineUnaryInterceptor(maxRPCDeadline),
+		ateinterceptors.ServerUnaryInterceptor,
 	}
 	if *experimentalEnableAuthz {
 		unaryInterceptors = append(unaryInterceptors, authz.UnaryServerInterceptor(authorizer))
 	}
 	unaryInterceptors = append(unaryInterceptors,
-		ateinterceptors.MaxDeadlineUnaryInterceptor(maxRPCDeadline),
-		ateinterceptors.ServerUnaryInterceptor,
 		ateinterceptors.RejectUnknownFieldsUnaryInterceptor,
 	)
 

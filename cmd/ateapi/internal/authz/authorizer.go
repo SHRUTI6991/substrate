@@ -16,11 +16,13 @@ package authz
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	"github.com/agent-substrate/substrate/internal/principal"
 	openfgav1 "github.com/openfga/api/proto/openfga/v1"
 	"github.com/openfga/openfga/pkg/server"
+	serverErrors "github.com/openfga/openfga/pkg/server/errors"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -75,9 +77,27 @@ func (a *Authorizer) checkRaw(ctx context.Context, user, relation, object string
 		ContextualTuples: ctxTuples,
 	})
 	if err != nil {
-		return false, status.Errorf(codes.Internal, "authz check failed: %v", err)
+		return false, statusFromFGAError(err)
 	}
 	return resp.GetAllowed(), nil
+}
+
+// statusFromFGAError translates an error returned by the embedded OpenFGA
+// server into a gRPC status error. Context cancellation and deadline expiry
+// (which OpenFGA maps to its own custom error codes) are preserved as
+// codes.Canceled and codes.DeadlineExceeded so client disconnects and timeouts
+// do not surface as 500s; all other OpenFGA errors (such as model/tuple
+// validation or storage failures) indicate a server-side fault and fail closed
+// with codes.Internal.
+func statusFromFGAError(err error) error {
+	switch {
+	case errors.Is(err, context.Canceled), errors.Is(err, serverErrors.ErrRequestCancelled):
+		return status.Errorf(codes.Canceled, "authz check canceled: %v", err)
+	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, serverErrors.ErrRequestDeadlineExceeded):
+		return status.Errorf(codes.DeadlineExceeded, "authz check deadline exceeded: %v", err)
+	default:
+		return status.Errorf(codes.Internal, "authz check failed: %v", err)
+	}
 }
 
 // contextualTuples synthesizes the invariant structural hierarchy tuples for an

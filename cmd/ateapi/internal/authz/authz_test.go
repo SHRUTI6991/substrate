@@ -16,6 +16,7 @@ package authz
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"runtime"
@@ -27,6 +28,7 @@ import (
 	"github.com/jackc/pgx/v5/stdlib"
 	openfgav1 "github.com/openfga/api/proto/openfga/v1"
 	"github.com/openfga/openfga/pkg/server"
+	serverErrors "github.com/openfga/openfga/pkg/server/errors"
 	"github.com/pressly/goose/v3"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
@@ -519,6 +521,46 @@ func TestAuthorizerAndPolicyManager_RuntimeChecks(t *testing.T) {
 	}
 	if err := authorizer.Check(bobCtx, RelationCanGet, AtespaceObject("team-x")); status.Code(err) != codes.PermissionDenied {
 		t.Errorf("expected bob's direct tuple removed after DeleteAtespacePolicies, got %v", err)
+	}
+
+	// 7. Check preserves Canceled and DeadlineExceeded and maps server-side
+	// OpenFGA errors (such as model/tuple validation failures) to Internal.
+	canceledCtx, cancel := context.WithCancel(aliceCtx)
+	cancel()
+	if err := authorizer.Check(canceledCtx, RelationCanGet, AtespaceObject("team-x")); status.Code(err) != codes.Canceled {
+		t.Errorf("expected Canceled for canceled context, got %v (%v)", status.Code(err), err)
+	}
+	expiredCtx, cancelDeadline := context.WithDeadline(aliceCtx, time.Now().Add(-time.Second))
+	defer cancelDeadline()
+	if err := authorizer.Check(expiredCtx, RelationCanGet, AtespaceObject("team-x")); status.Code(err) != codes.DeadlineExceeded {
+		t.Errorf("expected DeadlineExceeded for expired context, got %v (%v)", status.Code(err), err)
+	}
+	if err := authorizer.Check(aliceCtx, "unknown_relation", GlobalRootObject); status.Code(err) != codes.Internal {
+		t.Errorf("expected Internal for unknown relation, got %v (%v)", status.Code(err), err)
+	}
+}
+
+func TestStatusFromFGAError(t *testing.T) {
+	tests := []struct {
+		name     string
+		err      error
+		wantCode codes.Code
+	}{
+		{"context.Canceled", context.Canceled, codes.Canceled},
+		{"OpenFGA ErrRequestCancelled", serverErrors.ErrRequestCancelled, codes.Canceled},
+		{"context.DeadlineExceeded", context.DeadlineExceeded, codes.DeadlineExceeded},
+		{"OpenFGA ErrRequestDeadlineExceeded", serverErrors.ErrRequestDeadlineExceeded, codes.DeadlineExceeded},
+		{"gRPC InvalidArgument from OpenFGA", status.Error(codes.InvalidArgument, "bad tuple"), codes.Internal},
+		{"OpenFGA validation error code", serverErrors.ValidationError(errors.New("bad relation")), codes.Internal},
+		{"OpenFGA internal error code", serverErrors.NewInternalError("", errors.New("db down")), codes.Internal},
+		{"untyped error", errors.New("boom"), codes.Internal},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := status.Code(statusFromFGAError(tc.err)); got != tc.wantCode {
+				t.Errorf("status.Code(statusFromFGAError(%v)) = %v, want %v", tc.err, got, tc.wantCode)
+			}
+		})
 	}
 }
 
