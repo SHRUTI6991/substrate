@@ -287,3 +287,129 @@ func TestAccessPolicyRPCsAlwaysEnforced(t *testing.T) {
 		t.Fatal("found no AccessPolicy RPCs in Control_ServiceDesc")
 	}
 }
+
+func TestUnaryServerInterceptor_ActorAndTemplateChecks(t *testing.T) {
+	ctx := context.Background()
+	pool := startPostgres(t)
+	fgaServer, err := NewOpenFGAServer(pool)
+	if err != nil {
+		t.Fatalf("NewOpenFGAServer failed: %v", err)
+	}
+	t.Cleanup(fgaServer.Close)
+	authorizer, policyManager, err := New(ctx, pool, fgaServer, nil)
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+
+	// Actors run in team-a. The shared atespace holds templates that team-a's
+	// actors may reference.
+	for _, g := range []struct{ user, role, object string }{
+		{"global-owner", "owner", GlobalRootObject},
+		{"global-viewer", "viewer", GlobalRootObject},
+		{"editor", "editor", AtespaceObject("team-a")},
+		{"editor-with-shared", "editor", AtespaceObject("team-a")},
+		{"editor-with-shared", "viewer", AtespaceObject("shared")},
+		{"viewer", "viewer", AtespaceObject("team-a")},
+		{"shared-viewer", "viewer", AtespaceObject("shared")},
+	} {
+		writeTestTuple(t, ctx, pool, policyManager, g.user, g.role, g.object)
+	}
+
+	type rpcCall struct {
+		fullMethod string
+		req        any
+	}
+	local := &ateapipb.ObjectRef{Atespace: "team-a", Name: "tmpl"}
+	shared := &ateapipb.ObjectRef{Atespace: "shared", Name: "tmpl"}
+	actor := &ateapipb.ObjectRef{Atespace: "team-a", Name: "runner"}
+	actorWithTemplate := func(template *ateapipb.ObjectRef) *ateapipb.Actor {
+		return &ateapipb.Actor{
+			Metadata:      &ateapipb.ResourceMetadata{Atespace: actor.GetAtespace(), Name: actor.GetName()},
+			ActorTemplate: template,
+		}
+	}
+	createActor := func(template *ateapipb.ObjectRef) rpcCall {
+		return rpcCall{ateapipb.Control_CreateActor_FullMethodName, &ateapipb.CreateActorRequest{Actor: actorWithTemplate(template)}}
+	}
+	updateActor := func(template *ateapipb.ObjectRef) rpcCall {
+		return rpcCall{ateapipb.Control_UpdateActor_FullMethodName, &ateapipb.UpdateActorRequest{Actor: actorWithTemplate(template)}}
+	}
+	getActor := rpcCall{ateapipb.Control_GetActor_FullMethodName, &ateapipb.GetActorRequest{Actor: actor}}
+	deleteActor := rpcCall{ateapipb.Control_DeleteActor_FullMethodName, &ateapipb.DeleteActorRequest{Actor: actor}}
+	listActors := func(atespace string) rpcCall {
+		return rpcCall{ateapipb.Control_ListActors_FullMethodName, &ateapipb.ListActorsRequest{Atespace: atespace}}
+	}
+	createTemplate := rpcCall{ateapipb.Control_CreateActorTemplate_FullMethodName, &ateapipb.CreateActorTemplateRequest{
+		ActorTemplate: &ateapipb.ActorTemplate{Metadata: &ateapipb.ResourceMetadata{Atespace: local.GetAtespace(), Name: local.GetName()}},
+	}}
+	getTemplate := func(template *ateapipb.ObjectRef) rpcCall {
+		return rpcCall{ateapipb.Control_GetActorTemplate_FullMethodName, &ateapipb.GetActorTemplateRequest{ActorTemplate: template}}
+	}
+	deleteTemplate := rpcCall{ateapipb.Control_DeleteActorTemplate_FullMethodName, &ateapipb.DeleteActorTemplateRequest{ActorTemplate: local}}
+	listTemplates := func(atespace string) rpcCall {
+		return rpcCall{ateapipb.Control_ListActorTemplates_FullMethodName, &ateapipb.ListActorTemplatesRequest{Atespace: atespace}}
+	}
+
+	tests := []struct {
+		name     string
+		user     string
+		call     rpcCall
+		wantCode codes.Code
+	}{
+		// CreateActor needs can_create_actor on team-a and can_use on the template.
+		{"editor creates actor from local template", "editor", createActor(local), codes.OK},
+		{"viewer cannot create actor", "viewer", createActor(local), codes.PermissionDenied},
+		{"global viewer cannot create actor", "global-viewer", createActor(local), codes.PermissionDenied},
+		{"editor cannot create actor from template they cannot use", "editor", createActor(shared), codes.PermissionDenied},
+		{"editor creates actor from shared template they can use", "editor-with-shared", createActor(shared), codes.OK},
+		{"shared viewer cannot create actor without editor on team-a", "shared-viewer", createActor(shared), codes.PermissionDenied},
+		{"global owner creates actor from any template", "global-owner", createActor(shared), codes.OK},
+
+		// UpdateActor needs can_update on the actor and can_use on the template.
+		{"editor updates actor on local template", "editor", updateActor(local), codes.OK},
+		{"viewer cannot update actor", "viewer", updateActor(local), codes.PermissionDenied},
+		{"editor cannot point actor at template they cannot use", "editor", updateActor(shared), codes.PermissionDenied},
+		{"editor updates actor on shared template they can use", "editor-with-shared", updateActor(shared), codes.OK},
+
+		// GetActor and DeleteActor inherit from the actor's atespace.
+		{"viewer gets actor", "viewer", getActor, codes.OK},
+		{"outsider cannot get actor", "shared-viewer", getActor, codes.PermissionDenied},
+		{"editor deletes actor", "editor", deleteActor, codes.OK},
+		{"viewer cannot delete actor", "viewer", deleteActor, codes.PermissionDenied},
+
+		// Actor templates inherit from their atespace.
+		{"editor creates template", "editor", createTemplate, codes.OK},
+		{"viewer cannot create template", "viewer", createTemplate, codes.PermissionDenied},
+		{"shared viewer gets shared template", "shared-viewer", getTemplate(shared), codes.OK},
+		{"team-a editor cannot get shared template", "editor", getTemplate(shared), codes.PermissionDenied},
+		{"editor deletes template", "editor", deleteTemplate, codes.OK},
+		{"viewer cannot delete template", "viewer", deleteTemplate, codes.PermissionDenied},
+
+		// Listing one atespace needs viewer on it; listing all needs global viewer.
+		{"viewer lists actors in team-a", "viewer", listActors("team-a"), codes.OK},
+		{"outsider cannot list actors in team-a", "shared-viewer", listActors("team-a"), codes.PermissionDenied},
+		{"atespace viewer cannot list all actors", "viewer", listActors(""), codes.PermissionDenied},
+		{"global viewer lists all actors", "global-viewer", listActors(""), codes.OK},
+		{"shared viewer lists templates in shared", "shared-viewer", listTemplates("shared"), codes.OK},
+		{"atespace viewer cannot list all templates", "shared-viewer", listTemplates(""), codes.PermissionDenied},
+		{"global owner lists all templates", "global-owner", listTemplates(""), codes.OK},
+	}
+
+	interceptor := UnaryServerInterceptor(authorizer, true)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			userCtx := principal.InjectContext(ctx, principal.PrincipalInfo{ID: tc.user, Kind: principal.KindJWT})
+			handlerCalled := false
+			_, err := interceptor(userCtx, tc.call.req, &grpc.UnaryServerInfo{FullMethod: tc.call.fullMethod}, func(context.Context, any) (any, error) {
+				handlerCalled = true
+				return "ok", nil
+			})
+			if status.Code(err) != tc.wantCode {
+				t.Fatalf("status.Code(err) = %v, want %v (err: %v)", status.Code(err), tc.wantCode, err)
+			}
+			if wantHandler := tc.wantCode == codes.OK; handlerCalled != wantHandler {
+				t.Fatalf("handlerCalled = %v, want %v", handlerCalled, wantHandler)
+			}
+		})
+	}
+}
