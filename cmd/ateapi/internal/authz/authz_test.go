@@ -190,15 +190,15 @@ func TestEnsureStoreAndModel_InitializeAndCheck(t *testing.T) {
 		AuthorizationModelId: modelID,
 		TupleKey: &openfgav1.CheckRequestTupleKey{
 			User:     "user:alice",
-			Relation: "can_set_policy",
+			Relation: "can_update_access_policy",
 			Object:   "atespace:space-1",
 		},
 	})
 	if err != nil {
-		t.Fatalf("Check alice can_set_policy failed: %v", err)
+		t.Fatalf("Check alice can_update_access_policy failed: %v", err)
 	}
 	if !checkResp.GetAllowed() {
-		t.Errorf("expected alice to be allowed can_set_policy on atespace:space-1 via global owner inheritance")
+		t.Errorf("expected alice to be allowed can_update_access_policy on atespace:space-1 via global owner inheritance")
 	}
 
 	checkBob, err := fgaSrv.Check(ctx, &openfgav1.CheckRequest{
@@ -206,15 +206,15 @@ func TestEnsureStoreAndModel_InitializeAndCheck(t *testing.T) {
 		AuthorizationModelId: modelID,
 		TupleKey: &openfgav1.CheckRequestTupleKey{
 			User:     "user:bob",
-			Relation: "can_set_policy",
+			Relation: "can_update_access_policy",
 			Object:   "atespace:space-1",
 		},
 	})
 	if err != nil {
-		t.Fatalf("Check bob can_set_policy failed: %v", err)
+		t.Fatalf("Check bob can_update_access_policy failed: %v", err)
 	}
 	if checkBob.GetAllowed() {
-		t.Errorf("expected bob to be denied can_set_policy on atespace:space-1")
+		t.Errorf("expected bob to be denied can_update_access_policy on atespace:space-1")
 	}
 
 	// Verify idempotent re-initialization on the same shared pool reuses the existing store and model.

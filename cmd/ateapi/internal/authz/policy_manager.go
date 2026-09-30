@@ -16,50 +16,208 @@ package authz
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"slices"
+	"strings"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	openfgav1 "github.com/openfga/api/proto/openfga/v1"
 	"github.com/openfga/openfga/pkg/server"
+	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
-// PolicyManager manages authorization tuple writes and lifecycle cleanup in OpenFGA.
+var (
+	globalRoleOrder   = []string{RoleOwner, RoleViewer}
+	atespaceRoleOrder = []string{RoleOwner, RoleEditor, RoleViewer}
+)
+
+// GlobalPolicyStore is the subset of store.Interface used by BootstrapGlobalOwners.
+type GlobalPolicyStore interface {
+	GetGlobalAccessPolicy(ctx context.Context) (*ateapipb.AccessPolicy, error)
+	CreateGlobalAccessPolicy(ctx context.Context, policy *ateapipb.AccessPolicy) (*ateapipb.AccessPolicy, error)
+	UpdateGlobalAccessPolicy(ctx context.Context, precondition store.Precondition, mutate func(*ateapipb.AccessPolicy) error) (*ateapipb.AccessPolicy, error)
+}
+
+// PolicyManager manages authorization tuple writes, global owner bootstrapping,
+// and lifecycle cleanup in OpenFGA.
 type PolicyManager struct {
 	fgaServer *server.Server
 	storeID   string
 	modelID   string
 }
 
-// DeleteAtespacePolicies removes all tuples associated with an atespace in OpenFGA
-// in batches of maxTuplesPerWrite.
-//
-// Callers (such as atepg.DeleteAtespace) must pass a ctx carrying an active pgx.Tx
-// via ContextWithTx(ctx, tx). Both m.fgaServer.Read (which dispatches to
-// transactionalDatastore.ReadPage) and m.fgaServer.Write (which dispatches to
-// transactionalDatastore.Write) extract and execute on that pgx.Tx, failing with
-// ErrNoTransactionInContext if no transaction is present in ctx.
-func (m *PolicyManager) DeleteAtespacePolicies(ctx context.Context, name string) error {
+// CanonicalizeGlobalBindings sorts and deduplicates bindings for the global access policy.
+func CanonicalizeGlobalBindings(in []*ateapipb.Binding) []*ateapipb.Binding {
+	return canonicalizeBindings(in, globalRoleOrder)
+}
+
+// CanonicalizeAtespaceBindings sorts and deduplicates bindings for an atespace access policy.
+func CanonicalizeAtespaceBindings(in []*ateapipb.Binding) []*ateapipb.Binding {
+	return canonicalizeBindings(in, atespaceRoleOrder)
+}
+
+// BootstrapGlobalOwners grants owner on global:root to each of ownerIDs that
+// is not already an owner, creating the global access policy if none exists
+// yet or updating it if new owners are added.
+func (m *PolicyManager) BootstrapGlobalOwners(ctx context.Context, s GlobalPolicyStore, ownerIDs []string) error {
+	if m == nil || s == nil {
+		return fmt.Errorf("policy manager and store must not be nil")
+	}
+
+	var members []string
+	for _, id := range ownerIDs {
+		if clean := strings.TrimSpace(id); clean != "" {
+			member := "user:" + strings.TrimPrefix(clean, "user:")
+			if _, err := FormatMember(member); err != nil {
+				return fmt.Errorf("invalid bootstrap owner %q: %w", id, err)
+			}
+			members = append(members, member)
+		}
+	}
+
+	const maxAttempts = 5
+	for attempt := range maxAttempts {
+		err := bootstrapGlobalOwnersOnce(ctx, s, members)
+		if err == nil {
+			return nil
+		}
+		if attempt < maxAttempts-1 && (errors.Is(err, store.ErrAlreadyExists) || errors.Is(err, store.ErrVersionConflict)) {
+			continue
+		}
+		return err
+	}
+	return nil
+}
+
+func bootstrapGlobalOwnersOnce(ctx context.Context, s GlobalPolicyStore, members []string) error {
+	existing, err := s.GetGlobalAccessPolicy(ctx)
+	if errors.Is(err, store.ErrNotFound) {
+		if len(members) == 0 {
+			return fmt.Errorf("at least one bootstrap owner ID is required when global policy has no owners")
+		}
+		_, err := s.CreateGlobalAccessPolicy(ctx, &ateapipb.AccessPolicy{
+			Bindings: []*ateapipb.Binding{{Role: RoleOwner, Members: members}},
+		})
+		return err
+	}
+	if err != nil {
+		return fmt.Errorf("getting global access policy: %w", err)
+	}
+
+	owners := make(map[string]bool)
+	for _, b := range existing.GetBindings() {
+		if b.GetRole() == RoleOwner {
+			for _, member := range b.GetMembers() {
+				owners[member] = true
+			}
+		}
+	}
+	if len(members) == 0 {
+		if len(owners) > 0 {
+			return nil
+		}
+		return fmt.Errorf("at least one bootstrap owner ID is required when global policy has no owners")
+	}
+
+	var added []string
+	for _, member := range members {
+		if !owners[member] {
+			owners[member] = true
+			added = append(added, member)
+		}
+	}
+	if len(added) == 0 {
+		return nil
+	}
+
+	_, err = s.UpdateGlobalAccessPolicy(ctx, store.PreconditionFrom(existing), func(toUpdate *ateapipb.AccessPolicy) error {
+		toUpdate.Bindings = append(toUpdate.GetBindings(), &ateapipb.Binding{
+			Role:    RoleOwner,
+			Members: added,
+		})
+		return nil
+	})
+	return err
+}
+
+// ReconcileGlobalBindings reconciles the OpenFGA role bindings on global:root
+// within the caller's active PostgreSQL transaction.
+func (m *PolicyManager) ReconcileGlobalBindings(ctx context.Context, bindings []*ateapipb.Binding) error {
 	if m == nil {
 		return nil
 	}
-	obj := AtespaceObject(name)
-	var toDelete []*openfgav1.TupleKeyWithoutCondition
+	if _, ok := TxFromContext(ctx); !ok {
+		return ErrNoTransactionInContext
+	}
+	return m.reconcileBindings(ctx, GlobalRootObject, bindings)
+}
+
+// ReconcileAtespaceBindings reconciles the OpenFGA role bindings on an atespace
+// within the caller's active PostgreSQL transaction.
+func (m *PolicyManager) ReconcileAtespaceBindings(ctx context.Context, name string, bindings []*ateapipb.Binding) error {
+	if m == nil {
+		return nil
+	}
+	if _, ok := TxFromContext(ctx); !ok {
+		return ErrNoTransactionInContext
+	}
+	return m.reconcileBindings(ctx, AtespaceObject(name), bindings)
+}
+
+// DeleteAtespacePolicies removes all OpenFGA tuples associated with an atespace
+// within the caller's active PostgreSQL transaction.
+func (m *PolicyManager) DeleteAtespacePolicies(ctx context.Context, name string) error {
+	return m.ReconcileAtespaceBindings(ctx, name, nil)
+}
+
+func (m *PolicyManager) applyMutationsChunked(ctx context.Context, toWrite []*openfgav1.TupleKey, toDelete []*openfgav1.TupleKeyWithoutCondition) error {
+	for i := 0; i < len(toDelete); i += maxTuplesPerWrite {
+		end := min(i+maxTuplesPerWrite, len(toDelete))
+		if _, err := m.fgaServer.Write(ctx, &openfgav1.WriteRequest{
+			StoreId:              m.storeID,
+			AuthorizationModelId: m.modelID,
+			Deletes: &openfgav1.WriteRequestDeletes{
+				TupleKeys: toDelete[i:end],
+				OnMissing: "ignore",
+			},
+		}); err != nil {
+			return err
+		}
+	}
+	for i := 0; i < len(toWrite); i += maxTuplesPerWrite {
+		end := min(i+maxTuplesPerWrite, len(toWrite))
+		if _, err := m.fgaServer.Write(ctx, &openfgav1.WriteRequest{
+			StoreId:              m.storeID,
+			AuthorizationModelId: m.modelID,
+			Writes: &openfgav1.WriteRequestWrites{
+				TupleKeys:   toWrite[i:end],
+				OnDuplicate: "ignore",
+			},
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (m *PolicyManager) readObjectTuples(ctx context.Context, obj string) ([]*openfgav1.TupleKey, error) {
+	var out []*openfgav1.TupleKey
 	var contToken string
 	for {
 		readResp, err := m.fgaServer.Read(ctx, &openfgav1.ReadRequest{
 			StoreId:           m.storeID,
 			TupleKey:          &openfgav1.ReadRequestTupleKey{Object: obj},
+			PageSize:          wrapperspb.Int32(maxTuplesPerWrite),
 			ContinuationToken: contToken,
 		})
 		if err != nil {
-			return fmt.Errorf("reading tuples for deleted atespace %q: %w", name, err)
+			return nil, err
 		}
 		for _, t := range readResp.GetTuples() {
 			if tk := t.GetKey(); tk != nil {
-				toDelete = append(toDelete, &openfgav1.TupleKeyWithoutCondition{
-					User:     tk.GetUser(),
-					Relation: tk.GetRelation(),
-					Object:   tk.GetObject(),
-				})
+				out = append(out, tk)
 			}
 		}
 		if readResp.GetContinuationToken() == "" {
@@ -67,22 +225,88 @@ func (m *PolicyManager) DeleteAtespacePolicies(ctx context.Context, name string)
 		}
 		contToken = readResp.GetContinuationToken()
 	}
-	for i := 0; i < len(toDelete); i += maxTuplesPerWrite {
-		end := i + maxTuplesPerWrite
-		if end > len(toDelete) {
-			end = len(toDelete)
+	return out, nil
+}
+
+func canonicalizeBindings(in []*ateapipb.Binding, roleOrder []string) []*ateapipb.Binding {
+	byRole := make(map[string][]string, len(in))
+	for _, b := range in {
+		if len(b.GetMembers()) == 0 {
+			continue
 		}
-		_, err := m.fgaServer.Write(ctx, &openfgav1.WriteRequest{
-			StoreId:              m.storeID,
-			AuthorizationModelId: m.modelID,
-			Deletes: &openfgav1.WriteRequestDeletes{
-				TupleKeys: toDelete[i:end],
-				OnMissing: "ignore",
-			},
+		byRole[b.GetRole()] = append(byRole[b.GetRole()], b.GetMembers()...)
+	}
+	var out []*ateapipb.Binding
+	for _, role := range roleOrder {
+		members := byRole[role]
+		if len(members) == 0 {
+			continue
+		}
+		slices.Sort(members)
+		members = slices.Compact(members)
+		out = append(out, &ateapipb.Binding{
+			Role:    role,
+			Members: members,
 		})
-		if err != nil {
-			return fmt.Errorf("deleting tuples for atespace %q: %w", name, err)
+	}
+	return out
+}
+
+// reconcileBindings diffs the existing OpenFGA tuples on obj against
+// desiredBindings and writes only the net additions and deletions in batches,
+// leaving unchanged (relation, user) tuples untouched.
+func (m *PolicyManager) reconcileBindings(ctx context.Context, obj string, desiredBindings []*ateapipb.Binding) error {
+	existingTuples, err := m.readObjectTuples(ctx, obj)
+	if err != nil {
+		return fmt.Errorf("reading existing tuples for %q: %w", obj, err)
+	}
+
+	type relUser struct {
+		relation string
+		user     string
+	}
+	existingSet := make(map[relUser]struct{}, len(existingTuples))
+	for _, tk := range existingTuples {
+		existingSet[relUser{relation: tk.GetRelation(), user: tk.GetUser()}] = struct{}{}
+	}
+
+	var toWrite []*openfgav1.TupleKey
+	desiredSet := make(map[relUser]struct{}, len(desiredBindings)*2)
+	for _, b := range desiredBindings {
+		role := b.GetRole()
+		for _, rawMember := range b.GetMembers() {
+			fgaUser, err := FormatMember(rawMember)
+			if err != nil {
+				return err
+			}
+			ru := relUser{relation: role, user: fgaUser}
+			if _, alreadyDesired := desiredSet[ru]; alreadyDesired {
+				continue
+			}
+			desiredSet[ru] = struct{}{}
+			if _, exists := existingSet[ru]; !exists {
+				toWrite = append(toWrite, &openfgav1.TupleKey{
+					User:     ru.user,
+					Relation: ru.relation,
+					Object:   obj,
+				})
+			} else {
+				delete(existingSet, ru)
+			}
 		}
+	}
+
+	var toDelete []*openfgav1.TupleKeyWithoutCondition
+	for ru := range existingSet {
+		toDelete = append(toDelete, &openfgav1.TupleKeyWithoutCondition{
+			User:     ru.user,
+			Relation: ru.relation,
+			Object:   obj,
+		})
+	}
+
+	if err := m.applyMutationsChunked(ctx, toWrite, toDelete); err != nil {
+		return fmt.Errorf("reconciling policy tuples on %q: %w", obj, err)
 	}
 	return nil
 }

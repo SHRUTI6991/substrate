@@ -38,10 +38,18 @@ const (
 	// GlobalRootObject is the singleton global scope object identifier in OpenFGA.
 	GlobalRootObject = "global:root"
 
-	RelationCanCreateAtespace = "can_create_atespace"
-	RelationCanListAtespaces  = "can_list_atespaces"
-	RelationCanGet            = "can_get"
-	RelationCanDelete         = "can_delete"
+	RoleOwner  = "owner"
+	RoleEditor = "editor"
+	RoleViewer = "viewer"
+
+	RelationCanCreateAtespace     = "can_create_atespace"
+	RelationCanListAtespaces      = "can_list_atespaces"
+	RelationCanGet                = "can_get"
+	RelationCanDelete             = "can_delete"
+	RelationCanCreateAccessPolicy = "can_create_access_policy"
+	RelationCanGetAccessPolicy    = "can_get_access_policy"
+	RelationCanUpdateAccessPolicy = "can_update_access_policy"
+	RelationCanDeleteAccessPolicy = "can_delete_access_policy"
 
 	// maxTuplesPerWrite is OpenFGA's default maximum number of tuples allowed in a single Write request.
 	maxTuplesPerWrite = 100
@@ -79,6 +87,19 @@ func AtespaceObject(name string) string {
 // wildcard injection while preserving '/', '@', '.', '-', and '_'.
 func formatUser(id string) string {
 	return "user:" + tupleReplacer.Replace(id)
+}
+
+// FormatMember validates a policy member string (such as "user:alice@example.com")
+// and returns the percent-encoded OpenFGA user string.
+func FormatMember(member string) (string, error) {
+	id, ok := strings.CutPrefix(member, "user:")
+	if !ok || strings.TrimSpace(id) == "" {
+		return "", fmt.Errorf("member %q must have non-empty \"user:<id>\" format", member)
+	}
+	if id == "*" {
+		return "", fmt.Errorf("wildcard member %q is not allowed", member)
+	}
+	return formatUser(id), nil
 }
 
 //go:embed model.fga
