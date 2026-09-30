@@ -53,8 +53,15 @@ func atespaceRule[T any](relation string, getRef func(T) *ateapipb.ObjectRef) ta
 // defaultRPCPermissions is the declarative registry mapping gRPC full method names
 // to their required permission rules.
 var defaultRPCPermissions = map[string]targetExtractor{
-	ateapipb.Control_CreateAtespace_FullMethodName: globalRule[*ateapipb.CreateAtespaceRequest](RelationCanCreateAtespace),
-	ateapipb.Control_ListAtespaces_FullMethodName:  globalRule[*ateapipb.ListAtespacesRequest](RelationCanListAtespaces),
-	ateapipb.Control_GetAtespace_FullMethodName:    atespaceRule(RelationCanGet, (*ateapipb.GetAtespaceRequest).GetAtespace),
-	ateapipb.Control_DeleteAtespace_FullMethodName: atespaceRule(RelationCanDelete, (*ateapipb.DeleteAtespaceRequest).GetAtespace),
+	ateapipb.Control_CreateAtespace_FullMethodName:             globalRule[*ateapipb.CreateAtespaceRequest](RelationCanCreateAtespace),
+	ateapipb.Control_ListAtespaces_FullMethodName:              globalRule[*ateapipb.ListAtespacesRequest](RelationCanListAtespaces),
+	ateapipb.Control_GetAtespace_FullMethodName:                atespaceRule(RelationCanGet, (*ateapipb.GetAtespaceRequest).GetAtespace),
+	ateapipb.Control_DeleteAtespace_FullMethodName:             atespaceRule(RelationCanDelete, (*ateapipb.DeleteAtespaceRequest).GetAtespace),
+	ateapipb.Control_GetGlobalAccessPolicy_FullMethodName:      globalRule[*ateapipb.GetGlobalAccessPolicyRequest](RelationCanGetAccessPolicy),
+	ateapipb.Control_CreateGlobalAccessPolicy_FullMethodName:   globalRule[*ateapipb.CreateGlobalAccessPolicyRequest](RelationCanCreateAccessPolicy),
+	ateapipb.Control_UpdateGlobalAccessPolicy_FullMethodName:   globalRule[*ateapipb.UpdateGlobalAccessPolicyRequest](RelationCanUpdateAccessPolicy),
+	ateapipb.Control_GetAtespaceAccessPolicy_FullMethodName:    atespaceRule(RelationCanGetAccessPolicy, (*ateapipb.GetAtespaceAccessPolicyRequest).GetAtespace),
+	ateapipb.Control_CreateAtespaceAccessPolicy_FullMethodName: atespaceRule(RelationCanCreateAccessPolicy, (*ateapipb.CreateAtespaceAccessPolicyRequest).GetAtespace),
+	ateapipb.Control_UpdateAtespaceAccessPolicy_FullMethodName: atespaceRule(RelationCanUpdateAccessPolicy, (*ateapipb.UpdateAtespaceAccessPolicyRequest).GetAtespace),
+	ateapipb.Control_DeleteAtespaceAccessPolicy_FullMethodName: atespaceRule(RelationCanDeleteAccessPolicy, (*ateapipb.DeleteAtespaceAccessPolicyRequest).GetAtespace),
 }
