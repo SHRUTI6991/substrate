@@ -41,7 +41,6 @@ type global
     define can_get: viewer
 
     # --- Policy Governance ---
-    define can_create_access_policy: owner
     define can_get_access_policy: viewer
     define can_update_access_policy: owner
 

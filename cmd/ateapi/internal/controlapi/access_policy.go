@@ -38,28 +38,6 @@ var (
 	validAtespaceRoles = []string{authz.RoleOwner, authz.RoleEditor, authz.RoleViewer}
 )
 
-func (s *RPCService) CreateGlobalAccessPolicy(ctx context.Context, req *ateapipb.CreateGlobalAccessPolicyRequest) (*ateapipb.AccessPolicy, error) {
-	policy := req.GetAccessPolicy()
-	if policy != nil {
-		scrubResourceMetadataForCreate(policy.Metadata)
-		defaults.Apply(policy)
-	}
-	if errs := validateCreateGlobalAccessPolicyRequest(ctx, req); len(errs) > 0 {
-		return nil, resources.ToGRPCStatusError(errs)
-	}
-	return s.impl.CreateGlobalAccessPolicy(ctx, policy)
-}
-
-func (s *ServiceImpl) CreateGlobalAccessPolicy(ctx context.Context, policy *ateapipb.AccessPolicy) (*ateapipb.AccessPolicy, error) {
-	created, err := s.store.CreateGlobalAccessPolicy(ctx, policy)
-	return mapAccessPolicyWrite(created, err)
-}
-
-func validateCreateGlobalAccessPolicyRequest(ctx context.Context, req *ateapipb.CreateGlobalAccessPolicyRequest) field.ErrorList {
-	errs := Validate_CreateGlobalAccessPolicyRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
-	return append(errs, validateGlobalPolicyRules(ctx, field.NewPath("access_policy", "bindings"), req.GetAccessPolicy())...)
-}
-
 func (s *RPCService) GetGlobalAccessPolicy(ctx context.Context, req *ateapipb.GetGlobalAccessPolicyRequest) (*ateapipb.AccessPolicy, error) {
 	if errs := validateGetGlobalAccessPolicyRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToGRPCStatusError(errs)

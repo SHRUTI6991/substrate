@@ -85,21 +85,6 @@ func TestAccessPolicy_GlobalAndAtespaceGovernance(t *testing.T) {
 		t.Fatalf("unexpected initial global policy metadata: %+v", globalPol.GetMetadata())
 	}
 
-	// CreateGlobalAccessPolicy when already bootstrapped returns AlreadyExists.
-	createGlobalReq := &ateapipb.CreateGlobalAccessPolicyRequest{
-		AccessPolicy: &ateapipb.AccessPolicy{
-			Metadata: &ateapipb.ResourceMetadata{Name: "default"},
-			Bindings: []*ateapipb.Binding{
-				{Role: authz.RoleOwner, Members: []string{"user:alice@example.com"}},
-			},
-		},
-	}
-	if _, err := invoke(aliceCtx, ateapipb.Control_CreateGlobalAccessPolicy_FullMethodName, createGlobalReq, func(c context.Context, r any) (any, error) {
-		return svc.CreateGlobalAccessPolicy(c, r.(*ateapipb.CreateGlobalAccessPolicyRequest))
-	}); status.Code(err) != codes.AlreadyExists {
-		t.Fatalf("expected AlreadyExists on CreateGlobalAccessPolicy when already bootstrapped, got %v", err)
-	}
-
 	// 2. Anti-lockout: Alice cannot remove herself or leave zero owners on GlobalAccessPolicy.
 	noOwnerReq := &ateapipb.UpdateGlobalAccessPolicyRequest{
 		AccessPolicy: &ateapipb.AccessPolicy{
@@ -148,6 +133,21 @@ func TestAccessPolicy_GlobalAndAtespaceGovernance(t *testing.T) {
 	updatedGlobal := updatedGlobalAny.(*ateapipb.AccessPolicy)
 	if updatedGlobal.GetMetadata().GetVersion() != 2 {
 		t.Fatalf("expected global policy version 2, got %d", updatedGlobal.GetMetadata().GetVersion())
+	}
+
+	// Re-running BootstrapGlobalOwners (simulating a pod restart, even with a different
+	// bootstrap owner list) is a no-op once the global policy exists.
+	if err := policyManager.BootstrapGlobalOwners(ctx, persistence, []string{"charlie@example.com"}); err != nil {
+		t.Fatalf("BootstrapGlobalOwners on existing policy failed: %v", err)
+	}
+	afterRestartAny, err := invoke(aliceCtx, ateapipb.Control_GetGlobalAccessPolicy_FullMethodName, &ateapipb.GetGlobalAccessPolicyRequest{}, func(c context.Context, r any) (any, error) {
+		return svc.GetGlobalAccessPolicy(c, r.(*ateapipb.GetGlobalAccessPolicyRequest))
+	})
+	if err != nil {
+		t.Fatalf("GetGlobalAccessPolicy after restart failed: %v", err)
+	}
+	if afterRestart := afterRestartAny.(*ateapipb.AccessPolicy); afterRestart.GetMetadata().GetVersion() != 2 {
+		t.Fatalf("expected global policy version to remain 2 after BootstrapGlobalOwners, got %d", afterRestart.GetMetadata().GetVersion())
 	}
 
 	// Stale version 1 write must fail with Aborted.

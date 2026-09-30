@@ -147,9 +147,6 @@ service Control {
   // Get the deployment-wide global access policy singleton.
   rpc GetGlobalAccessPolicy(GetGlobalAccessPolicyRequest) returns (AccessPolicy) {}
 
-  // Create the deployment-wide global access policy singleton.
-  rpc CreateGlobalAccessPolicy(CreateGlobalAccessPolicyRequest) returns (AccessPolicy) {}
-
   // Replace the deployment-wide global access policy singleton.
   rpc UpdateGlobalAccessPolicy(UpdateGlobalAccessPolicyRequest) returns (AccessPolicy) {}
 
@@ -2324,15 +2321,6 @@ message Binding {
 
 // GetGlobalAccessPolicyRequest retrieves the deployment-wide global access policy singleton.
 message GetGlobalAccessPolicyRequest {}
-
-// CreateGlobalAccessPolicyRequest creates the deployment-wide global access policy singleton.
-message CreateGlobalAccessPolicyRequest {
-  // The policy to create. metadata.name must be "default" and
-  // metadata.atespace must be empty.
-  //
-  // +k8s:required
-  AccessPolicy access_policy = 1;
-}
 
 // UpdateGlobalAccessPolicyRequest replaces the deployment-wide global access policy singleton.
 message UpdateGlobalAccessPolicyRequest {

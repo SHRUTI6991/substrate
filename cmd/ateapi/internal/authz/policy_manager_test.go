@@ -16,7 +16,6 @@ package authz
 
 import (
 	"context"
-	"slices"
 	"testing"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
@@ -48,23 +47,6 @@ func (f *fakeGlobalPolicyStore) CreateGlobalAccessPolicy(_ context.Context, poli
 	return proto.Clone(created).(*ateapipb.AccessPolicy), nil
 }
 
-func (f *fakeGlobalPolicyStore) UpdateGlobalAccessPolicy(_ context.Context, pre store.Precondition, mutate func(*ateapipb.AccessPolicy) error) (*ateapipb.AccessPolicy, error) {
-	if f.policy == nil {
-		return nil, store.ErrNotFound
-	}
-	if err := pre.Check(f.policy.GetMetadata()); err != nil {
-		return nil, err
-	}
-	updated := proto.Clone(f.policy).(*ateapipb.AccessPolicy)
-	if err := mutate(updated); err != nil {
-		return nil, err
-	}
-	updated.Bindings = CanonicalizeGlobalBindings(updated.GetBindings())
-	updated.Metadata.Version++
-	f.policy = updated
-	return proto.Clone(updated).(*ateapipb.AccessPolicy), nil
-}
-
 func TestBootstrapGlobalOwners(t *testing.T) {
 	ctx := t.Context()
 	pm := &PolicyManager{}
@@ -87,28 +69,17 @@ func TestBootstrapGlobalOwners(t *testing.T) {
 		t.Errorf("bindings after initial bootstrap (-want +got):\n%s", diff)
 	}
 
-	// 3. Re-bootstrapping with an existing owner is a no-op and does not bump version.
-	if err := pm.BootstrapGlobalOwners(ctx, s, []string{"carol"}); err != nil {
-		t.Fatalf("BootstrapGlobalOwners(carol) repeat failed: %v", err)
-	}
-	if got := s.policy.GetMetadata().GetVersion(); got != 1 {
-		t.Errorf("version after repeat bootstrap = %d, want 1", got)
-	}
-
-	// 4. Bootstrapping an additional owner merges into bindings and bumps version to 2.
-	if err := pm.BootstrapGlobalOwners(ctx, s, []string{"dave"}); err != nil {
-		t.Fatalf("BootstrapGlobalOwners(dave) failed: %v", err)
-	}
-	if got := s.policy.GetMetadata().GetVersion(); got != 2 {
-		t.Errorf("version after adding dave = %d, want 2", got)
-	}
-	var owners []string
-	for _, b := range s.policy.GetBindings() {
-		if b.GetRole() == RoleOwner {
-			owners = b.GetMembers()
+	// 3. Re-bootstrapping with an existing owner, a different owner, or no owners
+	// is a no-op once a global policy with at least one owner exists.
+	for _, owners := range [][]string{{"carol"}, {"dave"}, nil} {
+		if err := pm.BootstrapGlobalOwners(ctx, s, owners); err != nil {
+			t.Fatalf("BootstrapGlobalOwners(%v) repeat failed: %v", owners, err)
 		}
-	}
-	if !slices.Contains(owners, "user:carol") || !slices.Contains(owners, "user:dave") {
-		t.Errorf("global owners = %v, want user:carol and user:dave", owners)
+		if got := s.policy.GetMetadata().GetVersion(); got != 1 {
+			t.Errorf("version after BootstrapGlobalOwners(%v) = %d, want 1", owners, got)
+		}
+		if diff := cmp.Diff(wantBindings, s.policy.GetBindings(), protocmp.Transform()); diff != "" {
+			t.Errorf("bindings after BootstrapGlobalOwners(%v) (-want +got):\n%s", owners, diff)
+		}
 	}
 }

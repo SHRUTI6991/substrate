@@ -33,11 +33,10 @@ var (
 	atespaceRoleOrder = []string{RoleOwner, RoleEditor, RoleViewer}
 )
 
-// GlobalPolicyStore is the subset of store.Interface used by BootstrapGlobalOwners.
+// GlobalPolicyStore is the persistence interface used by BootstrapGlobalOwners.
 type GlobalPolicyStore interface {
 	GetGlobalAccessPolicy(ctx context.Context) (*ateapipb.AccessPolicy, error)
 	CreateGlobalAccessPolicy(ctx context.Context, policy *ateapipb.AccessPolicy) (*ateapipb.AccessPolicy, error)
-	UpdateGlobalAccessPolicy(ctx context.Context, precondition store.Precondition, mutate func(*ateapipb.AccessPolicy) error) (*ateapipb.AccessPolicy, error)
 }
 
 // PolicyManager manages authorization tuple writes, global owner bootstrapping,
@@ -58,9 +57,10 @@ func CanonicalizeAtespaceBindings(in []*ateapipb.Binding) []*ateapipb.Binding {
 	return canonicalizeBindings(in, atespaceRoleOrder)
 }
 
-// BootstrapGlobalOwners grants owner on global:root to each of ownerIDs that
-// is not already an owner, creating the global access policy if none exists
-// yet or updating it if new owners are added.
+// BootstrapGlobalOwners seeds the initial global access policy with ownerIDs
+// as owners on global:root when no global access policy exists yet. If a
+// global access policy with at least one owner already exists, it immediately
+// returns nil without modifying the stored policy.
 func (m *PolicyManager) BootstrapGlobalOwners(ctx context.Context, s GlobalPolicyStore, ownerIDs []string) error {
 	if m == nil || s == nil {
 		return fmt.Errorf("policy manager and store must not be nil")
@@ -83,7 +83,7 @@ func (m *PolicyManager) BootstrapGlobalOwners(ctx context.Context, s GlobalPolic
 		if err == nil {
 			return nil
 		}
-		if attempt < maxAttempts-1 && (errors.Is(err, store.ErrAlreadyExists) || errors.Is(err, store.ErrVersionConflict)) {
+		if attempt < maxAttempts-1 && errors.Is(err, store.ErrAlreadyExists) {
 			continue
 		}
 		return err
@@ -106,40 +106,12 @@ func bootstrapGlobalOwnersOnce(ctx context.Context, s GlobalPolicyStore, members
 		return fmt.Errorf("getting global access policy: %w", err)
 	}
 
-	owners := make(map[string]bool)
 	for _, b := range existing.GetBindings() {
-		if b.GetRole() == RoleOwner {
-			for _, member := range b.GetMembers() {
-				owners[member] = true
-			}
-		}
-	}
-	if len(members) == 0 {
-		if len(owners) > 0 {
+		if b.GetRole() == RoleOwner && len(b.GetMembers()) > 0 {
 			return nil
 		}
-		return fmt.Errorf("at least one bootstrap owner ID is required when global policy has no owners")
 	}
-
-	var added []string
-	for _, member := range members {
-		if !owners[member] {
-			owners[member] = true
-			added = append(added, member)
-		}
-	}
-	if len(added) == 0 {
-		return nil
-	}
-
-	_, err = s.UpdateGlobalAccessPolicy(ctx, store.PreconditionFrom(existing), func(toUpdate *ateapipb.AccessPolicy) error {
-		toUpdate.Bindings = append(toUpdate.GetBindings(), &ateapipb.Binding{
-			Role:    RoleOwner,
-			Members: added,
-		})
-		return nil
-	})
-	return err
+	return fmt.Errorf("at least one bootstrap owner ID is required when global policy has no owners")
 }
 
 // ReconcileGlobalBindings reconciles the OpenFGA role bindings on global:root
