@@ -47,10 +47,10 @@ func (s *RPCService) GetGlobalAccessPolicy(ctx context.Context, req *ateapipb.Ge
 
 func (s *ServiceImpl) GetGlobalAccessPolicy(ctx context.Context) (*ateapipb.AccessPolicy, error) {
 	policy, err := s.store.GetGlobalAccessPolicy(ctx)
-	if errors.Is(err, store.ErrNotFound) {
-		return nil, status.Error(codes.NotFound, "Global AccessPolicy not found")
-	}
 	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, status.Error(codes.NotFound, "Global AccessPolicy not found")
+		}
 		return nil, fmt.Errorf("while getting Global access policy: %w", err)
 	}
 	return policy, nil
@@ -123,10 +123,10 @@ func (s *RPCService) GetAtespaceAccessPolicy(ctx context.Context, req *ateapipb.
 
 func (s *ServiceImpl) GetAtespaceAccessPolicy(ctx context.Context, name string) (*ateapipb.AccessPolicy, error) {
 	policy, err := s.store.GetAtespaceAccessPolicy(ctx, name)
-	if errors.Is(err, store.ErrNotFound) {
-		return nil, status.Errorf(codes.NotFound, "AccessPolicy for atespace %s not found", name)
-	}
 	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, status.Errorf(codes.NotFound, "AccessPolicy for atespace %s not found", name)
+		}
 		return nil, fmt.Errorf("while getting Atespace access policy: %w", err)
 	}
 	return policy, nil

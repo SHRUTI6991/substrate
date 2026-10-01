@@ -1282,10 +1282,14 @@ func Validate_Binding(
 			if earlyReturn {
 				return // do not proceed
 			}
-			if e := validate.EachValSliceVal(ctx, op, fldPath, obj, oldObj, nil, nil,
+			if e := validate.EachValSliceVal(ctx, op, fldPath, obj, oldObj, validate.DirectEqual, nil,
 				func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
 					return validate.MaxLength(ctx, op, fldPath, obj, oldObj, 512)
 				}); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			// lists with set semantics require unique values
+			if e := validate.ValSliceUnique(ctx, op, fldPath, obj, oldObj, validate.DirectEqual); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			return

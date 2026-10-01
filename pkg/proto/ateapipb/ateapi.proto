@@ -2297,11 +2297,10 @@ message AccessPolicy {
   repeated Binding bindings = 2;
 }
 
-// Binding associates a list of principals (members) with a single role defined
-// in the OpenFGA authorization model.
+// Binding associates a list of principals (members) with a single role.
 message Binding {
-  // The role name defined in model.fga for the parent resource type
-  // (e.g., "owner", "editor", "viewer").
+  // The role name for the parent resource type (e.g., "owner", "editor",
+  // "viewer").
   //
   // +k8s:required
   // +k8s:maxLength=64
@@ -2313,7 +2312,7 @@ message Binding {
   //   - "user:sa-ci-runner"
   //
   // +k8s:required
-  // +k8s:listType=atomic
+  // +k8s:listType=set
   // +k8s:maxItems=1500
   // +k8s:eachVal=+k8s:maxLength=512
   repeated string members = 2;

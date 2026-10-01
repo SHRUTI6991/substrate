@@ -29,7 +29,6 @@ import (
 func (p *Persistence) CreateGlobalAccessPolicy(ctx context.Context, policy *ateapipb.AccessPolicy) (*ateapipb.AccessPolicy, error) {
 	dbPolicy := proto.Clone(policy).(*ateapipb.AccessPolicy)
 	dbPolicy.Metadata = newCreateMetadata("", "default")
-	dbPolicy.Bindings = authz.CanonicalizeGlobalBindings(dbPolicy.GetBindings())
 	protoBytes, err := proto.Marshal(dbPolicy)
 	if err != nil {
 		return nil, fmt.Errorf("marshaling global access policy: %w", err)
@@ -91,7 +90,6 @@ func (p *Persistence) UpdateGlobalAccessPolicy(ctx context.Context, precondition
 	if err := mutate(dbPolicy); err != nil {
 		return nil, err
 	}
-	dbPolicy.Bindings = authz.CanonicalizeGlobalBindings(dbPolicy.GetBindings())
 	dbPolicy.Metadata = oldMeta
 	setUpdateMetadata(dbPolicy.Metadata, oldMeta)
 	protoBytes, err := proto.Marshal(dbPolicy)
@@ -118,7 +116,6 @@ func (p *Persistence) UpdateGlobalAccessPolicy(ctx context.Context, precondition
 func (p *Persistence) CreateAtespaceAccessPolicy(ctx context.Context, name string, policy *ateapipb.AccessPolicy) (*ateapipb.AccessPolicy, error) {
 	dbPolicy := proto.Clone(policy).(*ateapipb.AccessPolicy)
 	dbPolicy.Metadata = newCreateMetadata("", "default")
-	dbPolicy.Bindings = authz.CanonicalizeAtespaceBindings(dbPolicy.GetBindings())
 	protoBytes, err := proto.Marshal(dbPolicy)
 	if err != nil {
 		return nil, fmt.Errorf("marshaling access policy: %w", err)
@@ -183,7 +180,6 @@ func (p *Persistence) UpdateAtespaceAccessPolicy(ctx context.Context, name strin
 	if err := mutate(dbPolicy); err != nil {
 		return nil, err
 	}
-	dbPolicy.Bindings = authz.CanonicalizeAtespaceBindings(dbPolicy.GetBindings())
 	dbPolicy.Metadata = oldMeta
 	setUpdateMetadata(dbPolicy.Metadata, oldMeta)
 	protoBytes, err := proto.Marshal(dbPolicy)

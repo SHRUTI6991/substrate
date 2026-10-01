@@ -18,7 +18,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
@@ -26,11 +25,6 @@ import (
 	openfgav1 "github.com/openfga/api/proto/openfga/v1"
 	"github.com/openfga/openfga/pkg/server"
 	"google.golang.org/protobuf/types/known/wrapperspb"
-)
-
-var (
-	globalRoleOrder   = []string{RoleOwner, RoleViewer}
-	atespaceRoleOrder = []string{RoleOwner, RoleEditor, RoleViewer}
 )
 
 // GlobalPolicyStore is the persistence interface used by BootstrapGlobalOwners.
@@ -45,16 +39,6 @@ type PolicyManager struct {
 	fgaServer *server.Server
 	storeID   string
 	modelID   string
-}
-
-// CanonicalizeGlobalBindings sorts and deduplicates bindings for the global access policy.
-func CanonicalizeGlobalBindings(in []*ateapipb.Binding) []*ateapipb.Binding {
-	return canonicalizeBindings(in, globalRoleOrder)
-}
-
-// CanonicalizeAtespaceBindings sorts and deduplicates bindings for an atespace access policy.
-func CanonicalizeAtespaceBindings(in []*ateapipb.Binding) []*ateapipb.Binding {
-	return canonicalizeBindings(in, atespaceRoleOrder)
 }
 
 // BootstrapGlobalOwners seeds the initial global access policy with ownerIDs
@@ -198,30 +182,6 @@ func (m *PolicyManager) readObjectTuples(ctx context.Context, obj string) ([]*op
 		contToken = readResp.GetContinuationToken()
 	}
 	return out, nil
-}
-
-func canonicalizeBindings(in []*ateapipb.Binding, roleOrder []string) []*ateapipb.Binding {
-	byRole := make(map[string][]string, len(in))
-	for _, b := range in {
-		if len(b.GetMembers()) == 0 {
-			continue
-		}
-		byRole[b.GetRole()] = append(byRole[b.GetRole()], b.GetMembers()...)
-	}
-	var out []*ateapipb.Binding
-	for _, role := range roleOrder {
-		members := byRole[role]
-		if len(members) == 0 {
-			continue
-		}
-		slices.Sort(members)
-		members = slices.Compact(members)
-		out = append(out, &ateapipb.Binding{
-			Role:    role,
-			Members: members,
-		})
-	}
-	return out
 }
 
 // reconcileBindings diffs the existing OpenFGA tuples on obj against

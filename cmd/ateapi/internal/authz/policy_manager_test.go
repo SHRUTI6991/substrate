@@ -42,7 +42,6 @@ func (f *fakeGlobalPolicyStore) CreateGlobalAccessPolicy(_ context.Context, poli
 	}
 	created := proto.Clone(policy).(*ateapipb.AccessPolicy)
 	created.Metadata = &ateapipb.ResourceMetadata{Name: "default", Uid: "uid-1", Version: 1}
-	created.Bindings = CanonicalizeGlobalBindings(created.GetBindings())
 	f.policy = created
 	return proto.Clone(created).(*ateapipb.AccessPolicy), nil
 }

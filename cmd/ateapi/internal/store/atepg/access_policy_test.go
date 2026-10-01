@@ -36,7 +36,7 @@ func TestGlobalAccessPolicy_Lifecycle(t *testing.T) {
 	policy := &ateapipb.AccessPolicy{
 		Bindings: []*ateapipb.Binding{
 			{Role: authz.RoleViewer, Members: []string{"user:bob"}},
-			{Role: authz.RoleOwner, Members: []string{"user:alice", "user:alice"}},
+			{Role: authz.RoleOwner, Members: []string{"user:alice"}},
 		},
 	}
 	created, err := p.CreateGlobalAccessPolicy(ctx, policy)
@@ -46,11 +46,7 @@ func TestGlobalAccessPolicy_Lifecycle(t *testing.T) {
 	if created.GetMetadata().GetName() != "default" || created.GetMetadata().GetVersion() != 1 || created.GetMetadata().GetUid() == "" {
 		t.Fatalf("unexpected created metadata: %+v", created.GetMetadata())
 	}
-	wantBindings := []*ateapipb.Binding{
-		{Role: authz.RoleOwner, Members: []string{"user:alice"}},
-		{Role: authz.RoleViewer, Members: []string{"user:bob"}},
-	}
-	if diff := cmp.Diff(wantBindings, created.GetBindings(), protocmp.Transform()); diff != "" {
+	if diff := cmp.Diff(policy.GetBindings(), created.GetBindings(), protocmp.Transform()); diff != "" {
 		t.Errorf("created bindings (-want +got):\n%s", diff)
 	}
 

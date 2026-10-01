@@ -7489,12 +7489,11 @@ func (x *AccessPolicy) GetBindings() []*Binding {
 	return nil
 }
 
-// Binding associates a list of principals (members) with a single role defined
-// in the OpenFGA authorization model.
+// Binding associates a list of principals (members) with a single role.
 type Binding struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// The role name defined in model.fga for the parent resource type
-	// (e.g., "owner", "editor", "viewer").
+	// The role name for the parent resource type (e.g., "owner", "editor",
+	// "viewer").
 	//
 	// +k8s:required
 	// +k8s:maxLength=64
@@ -7505,7 +7504,7 @@ type Binding struct {
 	//   - "user:sa-ci-runner"
 	//
 	// +k8s:required
-	// +k8s:listType=atomic
+	// +k8s:listType=set
 	// +k8s:maxItems=1500
 	// +k8s:eachVal=+k8s:maxLength=512
 	Members       []string `protobuf:"bytes,2,rep,name=members,proto3" json:"members,omitempty"`
