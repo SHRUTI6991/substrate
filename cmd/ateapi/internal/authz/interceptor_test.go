@@ -36,7 +36,7 @@ func setupTestAuthorizer(t *testing.T) *Authorizer {
 	}
 	t.Cleanup(fgaServer.Close)
 
-	authorizer, policyManager, err := New(ctx, pool, fgaServer)
+	authorizer, policyManager, err := New(ctx, pool, fgaServer, nil)
 	if err != nil {
 		t.Fatalf("New failed: %v", err)
 	}

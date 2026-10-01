@@ -58,6 +58,7 @@ var defaultRPCPermissions = map[string]targetExtractor{
 	ateapipb.Control_GetAtespace_FullMethodName:                atespaceRule(RelationCanGet, (*ateapipb.GetAtespaceRequest).GetAtespace),
 	ateapipb.Control_DeleteAtespace_FullMethodName:             atespaceRule(RelationCanDelete, (*ateapipb.DeleteAtespaceRequest).GetAtespace),
 	ateapipb.Control_GetGlobalAccessPolicy_FullMethodName:      globalRule[*ateapipb.GetGlobalAccessPolicyRequest](RelationCanGetAccessPolicy),
+	ateapipb.Control_CreateGlobalAccessPolicy_FullMethodName:   globalRule[*ateapipb.CreateGlobalAccessPolicyRequest](RelationCanCreateAccessPolicy),
 	ateapipb.Control_UpdateGlobalAccessPolicy_FullMethodName:   globalRule[*ateapipb.UpdateGlobalAccessPolicyRequest](RelationCanUpdateAccessPolicy),
 	ateapipb.Control_GetAtespaceAccessPolicy_FullMethodName:    atespaceRule(RelationCanGetAccessPolicy, (*ateapipb.GetAtespaceAccessPolicyRequest).GetAtespace),
 	ateapipb.Control_CreateAtespaceAccessPolicy_FullMethodName: atespaceRule(RelationCanCreateAccessPolicy, (*ateapipb.CreateAtespaceAccessPolicyRequest).GetAtespace),

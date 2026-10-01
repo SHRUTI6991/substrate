@@ -18,9 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/jackc/pgx/v5"
 	openfgav1 "github.com/openfga/api/proto/openfga/v1"
@@ -32,75 +30,12 @@ import (
 // PostgreSQL transaction.
 var ErrNilTransaction = errors.New("authz: policy tuple writes require a non-nil pgx.Tx")
 
-// GlobalPolicyStore is the persistence interface used by BootstrapGlobalOwners.
-type GlobalPolicyStore interface {
-	GetGlobalAccessPolicy(ctx context.Context) (*ateapipb.AccessPolicy, error)
-	CreateGlobalAccessPolicy(ctx context.Context, policy *ateapipb.AccessPolicy) (*ateapipb.AccessPolicy, error)
-}
-
-// PolicyManager manages authorization tuple writes, global owner bootstrapping,
-// and lifecycle cleanup in OpenFGA.
+// PolicyManager writes OpenFGA tuples for access policy and atespace
+// mutations within the caller's PostgreSQL transaction.
 type PolicyManager struct {
 	fgaServer *server.Server
 	storeID   string
 	modelID   string
-}
-
-// BootstrapGlobalOwners seeds the initial global access policy with ownerIDs
-// as owners on global:root when no global access policy exists yet. If a
-// global access policy with at least one owner already exists, it immediately
-// returns nil without modifying the stored policy.
-func (m *PolicyManager) BootstrapGlobalOwners(ctx context.Context, s GlobalPolicyStore, ownerIDs []string) error {
-	if m == nil || s == nil {
-		return fmt.Errorf("policy manager and store must not be nil")
-	}
-
-	var members []string
-	for _, id := range ownerIDs {
-		if clean := strings.TrimSpace(id); clean != "" {
-			member := "user:" + strings.TrimPrefix(clean, "user:")
-			if _, err := FormatMember(member); err != nil {
-				return fmt.Errorf("invalid bootstrap owner %q: %w", id, err)
-			}
-			members = append(members, member)
-		}
-	}
-
-	const maxAttempts = 5
-	for attempt := range maxAttempts {
-		err := bootstrapGlobalOwnersOnce(ctx, s, members)
-		if err == nil {
-			return nil
-		}
-		if attempt < maxAttempts-1 && errors.Is(err, store.ErrAlreadyExists) {
-			continue
-		}
-		return err
-	}
-	return nil
-}
-
-func bootstrapGlobalOwnersOnce(ctx context.Context, s GlobalPolicyStore, members []string) error {
-	existing, err := s.GetGlobalAccessPolicy(ctx)
-	if errors.Is(err, store.ErrNotFound) {
-		if len(members) == 0 {
-			return fmt.Errorf("at least one bootstrap owner ID is required when global policy has no owners")
-		}
-		_, err := s.CreateGlobalAccessPolicy(ctx, &ateapipb.AccessPolicy{
-			Bindings: []*ateapipb.Binding{{Role: RoleOwner, Members: members}},
-		})
-		return err
-	}
-	if err != nil {
-		return fmt.Errorf("getting global access policy: %w", err)
-	}
-
-	for _, b := range existing.GetBindings() {
-		if b.GetRole() == RoleOwner && len(b.GetMembers()) > 0 {
-			return nil
-		}
-	}
-	return fmt.Errorf("at least one bootstrap owner ID is required when global policy has no owners")
 }
 
 // ReconcileGlobalBindings reconciles the OpenFGA role bindings on global:root

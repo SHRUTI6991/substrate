@@ -80,6 +80,7 @@ tests:
           owner: true
           viewer: true
           can_create_atespace: true
+          can_create_access_policy: true
           can_get_access_policy: true
           can_update_access_policy: true
           can_get: true
@@ -105,6 +106,7 @@ tests:
           owner: false
           viewer: true
           can_create_atespace: false
+          can_create_access_policy: false
           can_get_access_policy: true
           can_update_access_policy: false
           can_get: true

@@ -183,6 +183,8 @@ type Interface interface {
 	// in it).
 	DeleteAtespace(ctx context.Context, name string, precondition DeletePreconditions) (*ateapipb.Atespace, error)
 
+	// Creates the deployment-wide global access policy singleton.
+	CreateGlobalAccessPolicy(ctx context.Context, policy *ateapipb.AccessPolicy) (*ateapipb.AccessPolicy, error)
 	// Fetches the deployment-wide global access policy singleton.
 	GetGlobalAccessPolicy(ctx context.Context) (*ateapipb.AccessPolicy, error)
 	// Transactionally updates the deployment-wide global access policy singleton

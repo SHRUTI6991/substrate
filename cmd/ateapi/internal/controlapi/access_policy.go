@@ -23,7 +23,6 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/authz"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/defaults"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
-	"github.com/agent-substrate/substrate/internal/principal"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
@@ -37,6 +36,28 @@ var (
 	validGlobalRoles   = []string{authz.RoleOwner, authz.RoleViewer}
 	validAtespaceRoles = []string{authz.RoleOwner, authz.RoleEditor, authz.RoleViewer}
 )
+
+func (s *RPCService) CreateGlobalAccessPolicy(ctx context.Context, req *ateapipb.CreateGlobalAccessPolicyRequest) (*ateapipb.AccessPolicy, error) {
+	policy := req.GetAccessPolicy()
+	if policy != nil {
+		scrubResourceMetadataForCreate(policy.Metadata)
+		defaults.Apply(policy)
+	}
+	if errs := validateCreateGlobalAccessPolicyRequest(ctx, req); len(errs) > 0 {
+		return nil, resources.ToGRPCStatusError(errs)
+	}
+	return s.impl.CreateGlobalAccessPolicy(ctx, policy)
+}
+
+func (s *ServiceImpl) CreateGlobalAccessPolicy(ctx context.Context, policy *ateapipb.AccessPolicy) (*ateapipb.AccessPolicy, error) {
+	created, err := s.store.CreateGlobalAccessPolicy(ctx, policy)
+	return mapAccessPolicyWrite(created, err)
+}
+
+func validateCreateGlobalAccessPolicyRequest(ctx context.Context, req *ateapipb.CreateGlobalAccessPolicyRequest) field.ErrorList {
+	errs := Validate_CreateGlobalAccessPolicyRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
+	return append(errs, validateGlobalBindings(req.GetAccessPolicy())...)
+}
 
 func (s *RPCService) GetGlobalAccessPolicy(ctx context.Context, req *ateapipb.GetGlobalAccessPolicyRequest) (*ateapipb.AccessPolicy, error) {
 	if errs := validateGetGlobalAccessPolicyRequest(ctx, req); len(errs) > 0 {
@@ -81,7 +102,7 @@ func (s *ServiceImpl) UpdateGlobalAccessPolicy(ctx context.Context, precondition
 			return err
 		}
 		errs := validateAccessPolicyUpdate(ctx, field.NewPath("access_policy"), toUpdate, oldVal)
-		errs = append(errs, validateGlobalPolicyRules(ctx, field.NewPath("access_policy", "bindings"), toUpdate)...)
+		errs = append(errs, validateGlobalBindings(toUpdate)...)
 		if len(errs) > 0 {
 			return resources.ToGRPCStatusError(errs)
 		}
@@ -92,7 +113,7 @@ func (s *ServiceImpl) UpdateGlobalAccessPolicy(ctx context.Context, precondition
 
 func validateUpdateGlobalAccessPolicyRequest(ctx context.Context, req *ateapipb.UpdateGlobalAccessPolicyRequest) field.ErrorList {
 	errs := Validate_UpdateGlobalAccessPolicyRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
-	return append(errs, validateGlobalPolicyRules(ctx, field.NewPath("access_policy", "bindings"), req.GetAccessPolicy())...)
+	return append(errs, validateGlobalBindings(req.GetAccessPolicy())...)
 }
 
 func (s *RPCService) CreateAtespaceAccessPolicy(ctx context.Context, req *ateapipb.CreateAtespaceAccessPolicyRequest) (*ateapipb.AccessPolicy, error) {
@@ -221,9 +242,10 @@ func ValidateCustom_AccessPolicy_Metadata(_ context.Context, _ operation.Operati
 
 const maxMembersPerPolicy = 1500
 
-func validateGlobalPolicyRules(ctx context.Context, bindingsPath *field.Path, policy *ateapipb.AccessPolicy) field.ErrorList {
-	errs := validateAccessPolicyBindings(bindingsPath, policy, validGlobalRoles)
-	return append(errs, validateGlobalOwnersRetained(ctx, bindingsPath, policy)...)
+// validateGlobalBindings validates the bindings of a global access policy
+// request.
+func validateGlobalBindings(policy *ateapipb.AccessPolicy) field.ErrorList {
+	return validateAccessPolicyBindings(field.NewPath("access_policy", "bindings"), policy, validGlobalRoles)
 }
 
 func validateAccessPolicyBindings(bindingsPath *field.Path, policy *ateapipb.AccessPolicy, allowedRoles []string) field.ErrorList {
@@ -259,34 +281,6 @@ func validateAccessPolicyBindings(bindingsPath *field.Path, policy *ateapipb.Acc
 		errs = append(errs, field.TooMany(bindingsPath, totalMembers, maxMembersPerPolicy))
 	}
 	return errs
-}
-
-func validateGlobalOwnersRetained(ctx context.Context, bindingsPath *field.Path, policy *ateapipb.AccessPolicy) field.ErrorList {
-	if policy == nil {
-		return nil
-	}
-	var ownerMembers []string
-	for _, b := range policy.GetBindings() {
-		if b != nil && b.GetRole() == authz.RoleOwner {
-			ownerMembers = append(ownerMembers, b.GetMembers()...)
-		}
-	}
-	if len(ownerMembers) == 0 {
-		return field.ErrorList{
-			field.Required(bindingsPath, "global access policy must retain at least one owner"),
-		}
-	}
-	if !authz.IsBypassed(ctx) {
-		if p, ok := principal.FromContext(ctx); ok && p.ID != "" {
-			callerMember := "user:" + p.ID
-			if !slices.Contains(ownerMembers, callerMember) {
-				return field.ErrorList{
-					field.Forbidden(bindingsPath, fmt.Sprintf("caller %q cannot remove themselves from the global owner role", callerMember)),
-				}
-			}
-		}
-	}
-	return nil
 }
 
 func mapAccessPolicyWrite(policy *ateapipb.AccessPolicy, err error) (*ateapipb.AccessPolicy, error) {

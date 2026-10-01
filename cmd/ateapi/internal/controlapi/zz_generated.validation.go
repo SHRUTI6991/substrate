@@ -2112,6 +2112,46 @@ func Validate_CreateAtespaceRequest(
 	return errs
 }
 
+// Validate_CreateGlobalAccessPolicyRequest validates an instance of CreateGlobalAccessPolicyRequest according
+// to declarative validation rules in the API schema.
+func Validate_CreateGlobalAccessPolicyRequest(
+	ctx context.Context, op operation.Operation, fldPath *field.Path,
+	obj, oldObj *ateapipb.CreateGlobalAccessPolicyRequest) (errs field.ErrorList) {
+
+	{ // field ateapipb.CreateGlobalAccessPolicyRequest.AccessPolicy
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *ateapipb.AccessPolicy,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.RequiredPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// call the type's validation function
+			errs = append(errs, Validate_AccessPolicy(ctx, op, fldPath, obj, oldObj)...)
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.CreateGlobalAccessPolicyRequest) *ateapipb.AccessPolicy {
+				return oldObj.AccessPolicy
+			})
+		errs = append(errs, fn(fldPath.Child("access_policy"), obj.AccessPolicy, oldVal, oldObj != nil)...)
+	}
+
+	return errs
+}
+
 // Validate_CreateTagRequest validates an instance of CreateTagRequest according
 // to declarative validation rules in the API schema.
 func Validate_CreateTagRequest(

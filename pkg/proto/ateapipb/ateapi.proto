@@ -144,10 +144,18 @@ service Control {
   // tag in the reserved ate-golden atespace.
   rpc DeleteActorTemplate(DeleteActorTemplateRequest) returns (ActorTemplate) {}
 
-  // Get the deployment-wide global access policy singleton.
+  // Get the deployment-wide global access policy singleton. Returns NotFound
+  // until the policy has been created.
   rpc GetGlobalAccessPolicy(GetGlobalAccessPolicyRequest) returns (AccessPolicy) {}
 
-  // Replace the deployment-wide global access policy singleton.
+  // Create the deployment-wide global access policy singleton. The server's
+  // configured bootstrap owners are global owners whether or not this policy
+  // exists, so they can create it.
+  rpc CreateGlobalAccessPolicy(CreateGlobalAccessPolicyRequest) returns (AccessPolicy) {}
+
+  // Replace the deployment-wide global access policy singleton. Empty
+  // bindings revoke every grant held through the policy; bootstrap owners
+  // keep access.
   rpc UpdateGlobalAccessPolicy(UpdateGlobalAccessPolicyRequest) returns (AccessPolicy) {}
 
   // Get the access policy resource nested under an Atespace.
@@ -2320,6 +2328,15 @@ message Binding {
 
 // GetGlobalAccessPolicyRequest retrieves the deployment-wide global access policy singleton.
 message GetGlobalAccessPolicyRequest {}
+
+// CreateGlobalAccessPolicyRequest creates the deployment-wide global access policy singleton.
+message CreateGlobalAccessPolicyRequest {
+  // The policy to create. metadata.name must be "default" and
+  // metadata.atespace must be empty.
+  //
+  // +k8s:required
+  AccessPolicy access_policy = 1;
+}
 
 // UpdateGlobalAccessPolicyRequest replaces the deployment-wide global access policy singleton.
 message UpdateGlobalAccessPolicyRequest {

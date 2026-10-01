@@ -77,7 +77,7 @@ var (
 	postgresConnectionString = pflag.String("postgres-connection-string", "", "PostgreSQL connection string (libpq DSN or URI).")
 	postgresSchema           = pflag.String("postgres-schema", "public", "PostgreSQL schema for Substrate tables. This overrides a search_path connection parameter.")
 	experimentalEnableAuthz  = pflag.Bool("experimental-enable-authz", false, "Enable OpenFGA authorization checks (experimental).")
-	authzBootstrapOwners     = pflag.StringSlice("authz-bootstrap-owners", nil, "Principal IDs to bootstrap as initial global owners (required when --experimental-enable-authz is set).")
+	authzBootstrapOwners     = pflag.StringSlice("authz-bootstrap-owners", nil, "Principal IDs that are always global owners while listed, independent of the stored global AccessPolicy. Removing an ID revokes its access on restart. At least one is required when --experimental-enable-authz is set.")
 
 	actorIDJWTPoolFile   = pflag.String("actor-id-jwt-pool", "", "The file that contains the serialized JWT authority pool for signing actor JWTs")
 	actorJWTIssuer       = pflag.String("actor-jwt-issuer", "", "Issuer URL placed in the iss claim of actor JWTs. Relying parties fetch <issuer>/.well-known/openid-configuration to verify them. Must be https with no query or fragment. Empty means https://"+installdefaults.IDPServiceName+".<pod namespace>.svc.")
@@ -174,6 +174,11 @@ func main() {
 
 	var authorizer *authz.Authorizer
 	if *experimentalEnableAuthz {
+		// Without a bootstrap owner, nobody could create the global
+		// AccessPolicy, so the authorization-enabled API would be unusable.
+		if len(*authzBootstrapOwners) == 0 {
+			serverboot.Fatal(ctx, "Invalid flags", fmt.Errorf("--authz-bootstrap-owners must list at least one principal when --experimental-enable-authz is set"))
+		}
 		fgaServer, err := authz.NewOpenFGAServer(pool)
 		if err != nil {
 			serverboot.Fatal(ctx, "Failed to create OpenFGA server", err)
@@ -181,14 +186,11 @@ func main() {
 		defer fgaServer.Close()
 
 		var policyManager *authz.PolicyManager
-		authorizer, policyManager, err = authz.New(shutdownCtx, pool, fgaServer)
+		authorizer, policyManager, err = authz.New(shutdownCtx, pool, fgaServer, *authzBootstrapOwners)
 		if err != nil {
 			serverboot.Fatal(ctx, "Failed to initialize OpenFGA authz", err)
 		}
 		persistence.SetPolicyManager(policyManager)
-		if err := policyManager.BootstrapGlobalOwners(shutdownCtx, persistence, *authzBootstrapOwners); err != nil {
-			serverboot.Fatal(ctx, "Failed to bootstrap OpenFGA global owners", err)
-		}
 	}
 
 	clientset, ateClient, err := newKubeClients()
@@ -399,6 +401,7 @@ func logFlagValues(ctx context.Context) {
 		slog.String("postgres-connection-string", *postgresConnectionString),
 		slog.String("postgres-schema", *postgresSchema),
 		slog.Bool("experimental-enable-authz", *experimentalEnableAuthz),
+		slog.Any("authz-bootstrap-owners", *authzBootstrapOwners),
 		slog.String("actor-id-jwt-pool", *actorIDJWTPoolFile),
 		slog.String("actor-jwt-issuer", *actorJWTIssuer),
 		slog.String("actor-id-ca-pool", *actorIDCAPoolFile),

@@ -14,7 +14,11 @@
 
 package authz
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/google/go-cmp/cmp"
+)
 
 func TestFormatMember(t *testing.T) {
 	tests := []struct {
@@ -51,5 +55,26 @@ func TestFormatMember(t *testing.T) {
 				t.Errorf("FormatMember(%q) = %q, want %q", tc.member, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestParseBootstrapOwners(t *testing.T) {
+	got, err := parseBootstrapOwners([]string{"alice@example.com", " user:bob ", "alice@example.com", "a:b"})
+	if err != nil {
+		t.Fatalf("parseBootstrapOwners failed: %v", err)
+	}
+	want := map[string]struct{}{
+		"user:alice@example.com": {},
+		"user:bob":               {},
+		"user:a%3Ab":             {},
+	}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("parseBootstrapOwners (-want +got):\n%s", diff)
+	}
+
+	for _, bad := range []string{"", "  ", "user:", "*", "user:*", "alice\tbob"} {
+		if _, err := parseBootstrapOwners([]string{bad}); err == nil {
+			t.Errorf("parseBootstrapOwners(%q) succeeded, want error", bad)
+		}
 	}
 }

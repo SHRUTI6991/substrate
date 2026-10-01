@@ -35,7 +35,7 @@ func setupPostgresPersistenceWithAuthz(t *testing.T) *Persistence {
 		t.Fatalf("NewOpenFGAServer failed: %v", err)
 	}
 	t.Cleanup(fgaServer.Close)
-	_, policyManager, err := authz.New(t.Context(), p.pool, fgaServer)
+	_, policyManager, err := authz.New(t.Context(), p.pool, fgaServer, nil)
 	if err != nil {
 		t.Fatalf("authz.New failed: %v", err)
 	}

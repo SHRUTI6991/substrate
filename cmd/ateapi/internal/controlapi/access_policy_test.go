@@ -39,16 +39,13 @@ func TestAccessPolicy_GlobalAndAtespaceGovernance(t *testing.T) {
 	}
 	t.Cleanup(fgaServer.Close)
 
-	authorizer, policyManager, err := authz.New(ctx, pool, fgaServer)
+	// alice@example.com is a bootstrap owner: a global owner through server
+	// configuration, never through a stored AccessPolicy.
+	authorizer, policyManager, err := authz.New(ctx, pool, fgaServer, []string{"alice@example.com"})
 	if err != nil {
 		t.Fatalf("authz.New failed: %v", err)
 	}
 	persistence.SetPolicyManager(policyManager)
-
-	// Bootstrap alice@example.com as initial global owner.
-	if err := policyManager.BootstrapGlobalOwners(ctx, persistence, []string{"alice@example.com"}); err != nil {
-		t.Fatalf("BootstrapGlobalOwners failed: %v", err)
-	}
 
 	svc := NewRPCService(persistence, nil, nil, nil, nil, nil, nil, "", nil, nil, "", nil, nil)
 	interceptor := authz.UnaryServerInterceptor(authorizer)
@@ -62,116 +59,172 @@ func TestAccessPolicy_GlobalAndAtespaceGovernance(t *testing.T) {
 	aliceCtx := userCtx("alice@example.com")
 	bobCtx := userCtx("bob@example.com")
 	charlieCtx := userCtx("charlie@example.com")
+	daveCtx := userCtx("dave@example.com")
 
 	invoke := func(c context.Context, method string, req any, handler func(context.Context, any) (any, error)) (any, error) {
 		return interceptor(c, req, &grpc.UnaryServerInfo{FullMethod: method}, handler)
 	}
+	getGlobal := func(c context.Context) (*ateapipb.AccessPolicy, error) {
+		got, err := invoke(c, ateapipb.Control_GetGlobalAccessPolicy_FullMethodName, &ateapipb.GetGlobalAccessPolicyRequest{}, func(c context.Context, r any) (any, error) {
+			return svc.GetGlobalAccessPolicy(c, r.(*ateapipb.GetGlobalAccessPolicyRequest))
+		})
+		if err != nil {
+			return nil, err
+		}
+		return got.(*ateapipb.AccessPolicy), nil
+	}
+	createGlobal := func(c context.Context, req *ateapipb.CreateGlobalAccessPolicyRequest) (*ateapipb.AccessPolicy, error) {
+		got, err := invoke(c, ateapipb.Control_CreateGlobalAccessPolicy_FullMethodName, req, func(c context.Context, r any) (any, error) {
+			return svc.CreateGlobalAccessPolicy(c, r.(*ateapipb.CreateGlobalAccessPolicyRequest))
+		})
+		if err != nil {
+			return nil, err
+		}
+		return got.(*ateapipb.AccessPolicy), nil
+	}
+	updateGlobal := func(c context.Context, req *ateapipb.UpdateGlobalAccessPolicyRequest) (*ateapipb.AccessPolicy, error) {
+		got, err := invoke(c, ateapipb.Control_UpdateGlobalAccessPolicy_FullMethodName, req, func(c context.Context, r any) (any, error) {
+			return svc.UpdateGlobalAccessPolicy(c, r.(*ateapipb.UpdateGlobalAccessPolicyRequest))
+		})
+		if err != nil {
+			return nil, err
+		}
+		return got.(*ateapipb.AccessPolicy), nil
+	}
 
-	// 1. GetGlobalAccessPolicy: Alice (global owner) succeeds; Bob (unprivileged) is denied.
-	if _, err := invoke(bobCtx, ateapipb.Control_GetGlobalAccessPolicy_FullMethodName, &ateapipb.GetGlobalAccessPolicyRequest{}, func(c context.Context, r any) (any, error) {
-		return svc.GetGlobalAccessPolicy(c, r.(*ateapipb.GetGlobalAccessPolicyRequest))
-	}); status.Code(err) != codes.PermissionDenied {
+	// 1. No global policy exists at startup. Alice (bootstrap owner) is
+	// authorized and sees NotFound; Bob (unprivileged) is denied.
+	if _, err := getGlobal(bobCtx); status.Code(err) != codes.PermissionDenied {
 		t.Fatalf("expected PermissionDenied for Bob on GetGlobalAccessPolicy, got %v", err)
 	}
-
-	globalPolAny, err := invoke(aliceCtx, ateapipb.Control_GetGlobalAccessPolicy_FullMethodName, &ateapipb.GetGlobalAccessPolicyRequest{}, func(c context.Context, r any) (any, error) {
-		return svc.GetGlobalAccessPolicy(c, r.(*ateapipb.GetGlobalAccessPolicyRequest))
-	})
-	if err != nil {
-		t.Fatalf("GetGlobalAccessPolicy as Alice failed: %v", err)
-	}
-	globalPol := globalPolAny.(*ateapipb.AccessPolicy)
-	if globalPol.GetMetadata().GetName() != "default" || globalPol.GetMetadata().GetVersion() != 1 {
-		t.Fatalf("unexpected initial global policy metadata: %+v", globalPol.GetMetadata())
+	if _, err := getGlobal(aliceCtx); status.Code(err) != codes.NotFound {
+		t.Fatalf("expected NotFound for Alice before CreateGlobalAccessPolicy, got %v", err)
 	}
 
-	// 2. Anti-lockout: Alice cannot remove herself or leave zero owners on GlobalAccessPolicy.
-	noOwnerReq := &ateapipb.UpdateGlobalAccessPolicyRequest{
+	// 2. CreateGlobalAccessPolicy: Bob is denied; Alice creates a policy that
+	// does not list her, granting Dave owner and Bob viewer.
+	createGlobalReq := &ateapipb.CreateGlobalAccessPolicyRequest{
 		AccessPolicy: &ateapipb.AccessPolicy{
-			Metadata: globalPol.GetMetadata(),
+			Metadata: &ateapipb.ResourceMetadata{Name: "default"},
 			Bindings: []*ateapipb.Binding{
+				{Role: authz.RoleOwner, Members: []string{"user:dave@example.com"}},
 				{Role: authz.RoleViewer, Members: []string{"user:bob@example.com"}},
 			},
 		},
 	}
-	if _, err := invoke(aliceCtx, ateapipb.Control_UpdateGlobalAccessPolicy_FullMethodName, noOwnerReq, func(c context.Context, r any) (any, error) {
-		return svc.UpdateGlobalAccessPolicy(c, r.(*ateapipb.UpdateGlobalAccessPolicyRequest))
-	}); status.Code(err) != codes.InvalidArgument {
-		t.Fatalf("expected InvalidArgument when removing all global owners, got %v", err)
+	if _, err := createGlobal(bobCtx, createGlobalReq); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("expected PermissionDenied for Bob on CreateGlobalAccessPolicy, got %v", err)
+	}
+	globalPol, err := createGlobal(aliceCtx, createGlobalReq)
+	if err != nil {
+		t.Fatalf("CreateGlobalAccessPolicy as Alice failed: %v", err)
+	}
+	if globalPol.GetMetadata().GetName() != "default" || globalPol.GetMetadata().GetVersion() != 1 {
+		t.Fatalf("unexpected created global policy metadata: %+v", globalPol.GetMetadata())
+	}
+	if _, err := createGlobal(aliceCtx, createGlobalReq); status.Code(err) != codes.AlreadyExists {
+		t.Fatalf("expected AlreadyExists for second CreateGlobalAccessPolicy, got %v", err)
 	}
 
-	selfLockoutReq := &ateapipb.UpdateGlobalAccessPolicyRequest{
-		AccessPolicy: &ateapipb.AccessPolicy{
-			Metadata: globalPol.GetMetadata(),
-			Bindings: []*ateapipb.Binding{
-				{Role: authz.RoleOwner, Members: []string{"user:bob@example.com"}},
-			},
-		},
+	// 3. Bob (stored global viewer) can read but not update the policy.
+	if _, err := getGlobal(bobCtx); err != nil {
+		t.Fatalf("expected Bob (global viewer) to be allowed GetGlobalAccessPolicy, got %v", err)
 	}
-	if _, err := invoke(aliceCtx, ateapipb.Control_UpdateGlobalAccessPolicy_FullMethodName, selfLockoutReq, func(c context.Context, r any) (any, error) {
-		return svc.UpdateGlobalAccessPolicy(c, r.(*ateapipb.UpdateGlobalAccessPolicyRequest))
-	}); status.Code(err) != codes.InvalidArgument || !strings.Contains(err.Error(), "cannot remove themselves") {
-		t.Fatalf("expected self-lockout InvalidArgument error, got %v", err)
-	}
-
-	// 3. UpdateGlobalAccessPolicy: Alice grants Bob global viewer; version increments to 2.
 	updateGlobalReq := &ateapipb.UpdateGlobalAccessPolicyRequest{
 		AccessPolicy: &ateapipb.AccessPolicy{
 			Metadata: globalPol.GetMetadata(),
 			Bindings: []*ateapipb.Binding{
-				{Role: authz.RoleOwner, Members: []string{"user:alice@example.com"}},
-				{Role: authz.RoleViewer, Members: []string{"user:bob@example.com"}},
+				{Role: authz.RoleOwner, Members: []string{"user:dave@example.com"}},
+				{Role: authz.RoleViewer, Members: []string{"user:bob@example.com", "user:charlie@example.com"}},
 			},
 		},
 	}
-	updatedGlobalAny, err := invoke(aliceCtx, ateapipb.Control_UpdateGlobalAccessPolicy_FullMethodName, updateGlobalReq, func(c context.Context, r any) (any, error) {
-		return svc.UpdateGlobalAccessPolicy(c, r.(*ateapipb.UpdateGlobalAccessPolicyRequest))
-	})
-	if err != nil {
-		t.Fatalf("UpdateGlobalAccessPolicy failed: %v", err)
-	}
-	updatedGlobal := updatedGlobalAny.(*ateapipb.AccessPolicy)
-	if updatedGlobal.GetMetadata().GetVersion() != 2 {
-		t.Fatalf("expected global policy version 2, got %d", updatedGlobal.GetMetadata().GetVersion())
-	}
-
-	// Re-running BootstrapGlobalOwners (simulating a pod restart, even with a different
-	// bootstrap owner list) is a no-op once the global policy exists.
-	if err := policyManager.BootstrapGlobalOwners(ctx, persistence, []string{"charlie@example.com"}); err != nil {
-		t.Fatalf("BootstrapGlobalOwners on existing policy failed: %v", err)
-	}
-	afterRestartAny, err := invoke(aliceCtx, ateapipb.Control_GetGlobalAccessPolicy_FullMethodName, &ateapipb.GetGlobalAccessPolicyRequest{}, func(c context.Context, r any) (any, error) {
-		return svc.GetGlobalAccessPolicy(c, r.(*ateapipb.GetGlobalAccessPolicyRequest))
-	})
-	if err != nil {
-		t.Fatalf("GetGlobalAccessPolicy after restart failed: %v", err)
-	}
-	if afterRestart := afterRestartAny.(*ateapipb.AccessPolicy); afterRestart.GetMetadata().GetVersion() != 2 {
-		t.Fatalf("expected global policy version to remain 2 after BootstrapGlobalOwners, got %d", afterRestart.GetMetadata().GetVersion())
-	}
-
-	// Stale version 1 write must fail with Aborted.
-	if _, err := invoke(aliceCtx, ateapipb.Control_UpdateGlobalAccessPolicy_FullMethodName, updateGlobalReq, func(c context.Context, r any) (any, error) {
-		return svc.UpdateGlobalAccessPolicy(c, r.(*ateapipb.UpdateGlobalAccessPolicyRequest))
-	}); status.Code(err) != codes.Aborted {
-		t.Fatalf("expected Aborted for stale version on UpdateGlobalAccessPolicy, got %v", err)
-	}
-
-	// Bob (now global viewer) can call GetGlobalAccessPolicy (`can_get_access_policy`),
-	// but is still denied UpdateGlobalAccessPolicy (`can_update_access_policy`).
-	if _, err := invoke(bobCtx, ateapipb.Control_GetGlobalAccessPolicy_FullMethodName, &ateapipb.GetGlobalAccessPolicyRequest{}, func(c context.Context, r any) (any, error) {
-		return svc.GetGlobalAccessPolicy(c, r.(*ateapipb.GetGlobalAccessPolicyRequest))
-	}); err != nil {
-		t.Fatalf("expected Bob (global viewer) to be allowed GetGlobalAccessPolicy, got %v", err)
-	}
-	if _, err := invoke(bobCtx, ateapipb.Control_UpdateGlobalAccessPolicy_FullMethodName, updateGlobalReq, func(c context.Context, r any) (any, error) {
-		return svc.UpdateGlobalAccessPolicy(c, r.(*ateapipb.UpdateGlobalAccessPolicyRequest))
-	}); status.Code(err) != codes.PermissionDenied {
+	if _, err := updateGlobal(bobCtx, updateGlobalReq); status.Code(err) != codes.PermissionDenied {
 		t.Fatalf("expected Bob (global viewer) to be denied UpdateGlobalAccessPolicy, got %v", err)
 	}
 
-	// 4. CreateAtespace does not automatically create an AccessPolicy row;
-	// GetAtespaceAccessPolicy returns NotFound until CreateAtespaceAccessPolicy is called.
+	// 4. Dave (stored global owner) updates the policy; a stale write is Aborted.
+	updatedGlobal, err := updateGlobal(daveCtx, updateGlobalReq)
+	if err != nil {
+		t.Fatalf("UpdateGlobalAccessPolicy as Dave failed: %v", err)
+	}
+	if updatedGlobal.GetMetadata().GetVersion() != 2 {
+		t.Fatalf("expected global policy version 2, got %d", updatedGlobal.GetMetadata().GetVersion())
+	}
+	if _, err := updateGlobal(daveCtx, updateGlobalReq); status.Code(err) != codes.Aborted {
+		t.Fatalf("expected Aborted for stale version on UpdateGlobalAccessPolicy, got %v", err)
+	}
+
+	// 5. Empty bindings are allowed and revoke every stored grant. Alice keeps
+	// access as a bootstrap owner, so nobody is locked out.
+	emptied, err := updateGlobal(aliceCtx, &ateapipb.UpdateGlobalAccessPolicyRequest{
+		AccessPolicy: &ateapipb.AccessPolicy{Metadata: updatedGlobal.GetMetadata()},
+	})
+	if err != nil {
+		t.Fatalf("UpdateGlobalAccessPolicy with empty bindings failed: %v", err)
+	}
+	if len(emptied.GetBindings()) != 0 || emptied.GetMetadata().GetVersion() != 3 {
+		t.Fatalf("unexpected emptied global policy: %+v", emptied)
+	}
+	if _, err := getGlobal(bobCtx); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("expected Bob denied after empty update, got %v", err)
+	}
+	if _, err := getGlobal(daveCtx); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("expected Dave denied after empty update, got %v", err)
+	}
+	if _, err := getGlobal(aliceCtx); err != nil {
+		t.Fatalf("expected Alice (bootstrap owner) allowed after empty update, got %v", err)
+	}
+
+	// A bootstrap owner may also be listed in the stored policy; the
+	// contextual grant then duplicates a stored tuple, which must not break
+	// the check.
+	withAlice, err := updateGlobal(aliceCtx, &ateapipb.UpdateGlobalAccessPolicyRequest{
+		AccessPolicy: &ateapipb.AccessPolicy{
+			Metadata: emptied.GetMetadata(),
+			Bindings: []*ateapipb.Binding{{Role: authz.RoleOwner, Members: []string{"user:alice@example.com"}}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("UpdateGlobalAccessPolicy listing Alice failed: %v", err)
+	}
+	if _, err := getGlobal(aliceCtx); err != nil {
+		t.Fatalf("expected Alice (bootstrap and stored owner) allowed, got %v", err)
+	}
+
+	// 6. Removing Alice from the bootstrap owners (a restart with a different
+	// configuration) leaves only her stored grant; once that is gone too she
+	// is denied, while the new bootstrap owner is allowed.
+	restarted, _, err := authz.New(ctx, pool, fgaServer, []string{"charlie@example.com"})
+	if err != nil {
+		t.Fatalf("authz.New after restart failed: %v", err)
+	}
+	restartedInterceptor := authz.UnaryServerInterceptor(restarted)
+	getGlobalAfterRestart := func(c context.Context) error {
+		_, err := restartedInterceptor(c, &ateapipb.GetGlobalAccessPolicyRequest{}, &grpc.UnaryServerInfo{FullMethod: ateapipb.Control_GetGlobalAccessPolicy_FullMethodName}, func(c context.Context, r any) (any, error) {
+			return svc.GetGlobalAccessPolicy(c, r.(*ateapipb.GetGlobalAccessPolicyRequest))
+		})
+		return err
+	}
+	if err := getGlobalAfterRestart(aliceCtx); err != nil {
+		t.Fatalf("expected Alice allowed through her stored grant after removal from bootstrap owners, got %v", err)
+	}
+	if _, err := updateGlobal(aliceCtx, &ateapipb.UpdateGlobalAccessPolicyRequest{
+		AccessPolicy: &ateapipb.AccessPolicy{Metadata: withAlice.GetMetadata()},
+	}); err != nil {
+		t.Fatalf("UpdateGlobalAccessPolicy removing Alice failed: %v", err)
+	}
+	if err := getGlobalAfterRestart(aliceCtx); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("expected Alice denied after removal from bootstrap owners and the policy, got %v", err)
+	}
+	if err := getGlobalAfterRestart(charlieCtx); err != nil {
+		t.Fatalf("expected Charlie (new bootstrap owner) allowed, got %v", err)
+	}
+
+	// 7. With the original configuration, Alice inherits owner on every
+	// atespace from her bootstrap global owner grant. CreateAtespace does not
+	// create an AccessPolicy row; GetAtespaceAccessPolicy returns NotFound
+	// until CreateAtespaceAccessPolicy is called.
 	createSpaceReq := &ateapipb.CreateAtespaceRequest{
 		Atespace: &ateapipb.Atespace{
 			Metadata: &ateapipb.ResourceMetadata{Name: "team-alpha"},
@@ -192,7 +245,7 @@ func TestAccessPolicy_GlobalAndAtespaceGovernance(t *testing.T) {
 		t.Fatalf("expected NotFound before CreateAtespaceAccessPolicy, got %v", err)
 	}
 
-	// 5. CreateAtespaceAccessPolicy: Alice creates team-alpha's policy granting Charlie editor.
+	// 8. CreateAtespaceAccessPolicy: Alice creates team-alpha's policy granting Charlie editor.
 	createSpacePolReq := &ateapipb.CreateAtespaceAccessPolicyRequest{
 		Atespace: &ateapipb.ObjectRef{Name: "team-alpha"},
 		AccessPolicy: &ateapipb.AccessPolicy{
@@ -246,7 +299,7 @@ func TestAccessPolicy_GlobalAndAtespaceGovernance(t *testing.T) {
 		t.Fatalf("expected Charlie (atespace editor) denied DeleteAtespaceAccessPolicy, got %v", err)
 	}
 
-	// 6. UpdateAtespaceAccessPolicy as Alice succeeds and bumps version to 2.
+	// 9. UpdateAtespaceAccessPolicy as Alice succeeds and bumps version to 2.
 	updatedSpacePolAny, err := invoke(aliceCtx, ateapipb.Control_UpdateAtespaceAccessPolicy_FullMethodName, updateSpacePolReq, func(c context.Context, r any) (any, error) {
 		return svc.UpdateAtespaceAccessPolicy(c, r.(*ateapipb.UpdateAtespaceAccessPolicyRequest))
 	})
@@ -258,7 +311,7 @@ func TestAccessPolicy_GlobalAndAtespaceGovernance(t *testing.T) {
 		t.Fatalf("expected Atespace policy version 2, got %d", updatedSpacePol.GetMetadata().GetVersion())
 	}
 
-	// 7. DeleteAtespaceAccessPolicy removes both the policy row and OpenFGA tuples.
+	// 10. DeleteAtespaceAccessPolicy removes both the policy row and OpenFGA tuples.
 	if _, err := invoke(aliceCtx, ateapipb.Control_DeleteAtespaceAccessPolicy_FullMethodName, deleteSpacePolReq, func(c context.Context, r any) (any, error) {
 		return svc.DeleteAtespaceAccessPolicy(c, r.(*ateapipb.DeleteAtespaceAccessPolicyRequest))
 	}); err != nil {
@@ -271,7 +324,7 @@ func TestAccessPolicy_GlobalAndAtespaceGovernance(t *testing.T) {
 		t.Fatalf("expected Charlie denied after DeleteAtespaceAccessPolicy, got %v", err)
 	}
 
-	// 8. Recreate team-alpha's AccessPolicy; it gets a new UID, so an Update carrying
+	// 11. Recreate team-alpha's AccessPolicy; it gets a new UID, so an Update carrying
 	// the old UID fails with Aborted (UID conflict).
 	recreatedPolAny, err := invoke(aliceCtx, ateapipb.Control_CreateAtespaceAccessPolicy_FullMethodName, createSpacePolReq, func(c context.Context, r any) (any, error) {
 		return svc.CreateAtespaceAccessPolicy(c, r.(*ateapipb.CreateAtespaceAccessPolicyRequest))

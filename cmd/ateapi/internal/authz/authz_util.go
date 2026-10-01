@@ -162,16 +162,23 @@ func EnsureStoreAndModel(ctx context.Context, pool *pgxpool.Pool, fgaServer *ser
 
 // New provisions the default OpenFGA store and authorization model via
 // EnsureStoreAndModel and returns the read-path Authorizer and write-path
-// PolicyManager.
-func New(ctx context.Context, pool *pgxpool.Pool, fgaServer *server.Server) (*Authorizer, *PolicyManager, error) {
+// PolicyManager. bootstrapOwners are principal IDs (with or without the
+// "user:" prefix) that the Authorizer treats as owners of global:root on every
+// check, independent of any stored AccessPolicy.
+func New(ctx context.Context, pool *pgxpool.Pool, fgaServer *server.Server, bootstrapOwners []string) (*Authorizer, *PolicyManager, error) {
+	owners, err := parseBootstrapOwners(bootstrapOwners)
+	if err != nil {
+		return nil, nil, err
+	}
 	storeID, modelID, err := EnsureStoreAndModel(ctx, pool, fgaServer)
 	if err != nil {
 		return nil, nil, err
 	}
 	authorizer := &Authorizer{
-		fgaServer: fgaServer,
-		storeID:   storeID,
-		modelID:   modelID,
+		fgaServer:       fgaServer,
+		storeID:         storeID,
+		modelID:         modelID,
+		bootstrapOwners: owners,
 	}
 	policyManager := &PolicyManager{
 		fgaServer: fgaServer,
@@ -179,6 +186,20 @@ func New(ctx context.Context, pool *pgxpool.Pool, fgaServer *server.Server) (*Au
 		modelID:   modelID,
 	}
 	return authorizer, policyManager, nil
+}
+
+// parseBootstrapOwners validates principal IDs and returns the set of their
+// OpenFGA user strings.
+func parseBootstrapOwners(ids []string) (map[string]struct{}, error) {
+	owners := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		user, err := FormatMember("user:" + strings.TrimPrefix(strings.TrimSpace(id), "user:"))
+		if err != nil {
+			return nil, fmt.Errorf("invalid bootstrap owner %q: %w", id, err)
+		}
+		owners[user] = struct{}{}
+	}
+	return owners, nil
 }
 
 // ateFGAInitLockID is a 64-bit identifier ("atefga") for serializing
