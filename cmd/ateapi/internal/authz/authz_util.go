@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"unicode"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	openfgav1 "github.com/openfga/api/proto/openfga/v1"
@@ -90,7 +91,8 @@ func formatUser(id string) string {
 }
 
 // FormatMember validates a policy member string (such as "user:alice@example.com")
-// and returns the percent-encoded OpenFGA user string.
+// and returns the percent-encoded OpenFGA user string. Control characters are
+// rejected because OpenFGA does not accept them in tuple user IDs.
 func FormatMember(member string) (string, error) {
 	id, ok := strings.CutPrefix(member, "user:")
 	if !ok || strings.TrimSpace(id) == "" {
@@ -98,6 +100,9 @@ func FormatMember(member string) (string, error) {
 	}
 	if id == "*" {
 		return "", fmt.Errorf("wildcard member %q is not allowed", member)
+	}
+	if strings.ContainsFunc(id, unicode.IsControl) {
+		return "", fmt.Errorf("member %q must not contain control characters", member)
 	}
 	return formatUser(id), nil
 }

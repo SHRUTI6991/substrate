@@ -19,7 +19,6 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/authz"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/jackc/pgx/v5"
@@ -27,6 +26,9 @@ import (
 )
 
 func (p *Persistence) CreateGlobalAccessPolicy(ctx context.Context, policy *ateapipb.AccessPolicy) (*ateapipb.AccessPolicy, error) {
+	if p.policyManager == nil {
+		return nil, store.ErrAuthzDisabled
+	}
 	dbPolicy := proto.Clone(policy).(*ateapipb.AccessPolicy)
 	dbPolicy.Metadata = newCreateMetadata("", "default")
 	protoBytes, err := proto.Marshal(dbPolicy)
@@ -41,7 +43,7 @@ func (p *Persistence) CreateGlobalAccessPolicy(ctx context.Context, policy *atea
 	defer tx.Rollback(ctx) //nolint:errcheck // no-op once committed
 
 	_, err = tx.Exec(ctx, `
-		INSERT INTO global_access_policies (id, uid, version, proto)
+		INSERT INTO global_access_policy (id, uid, version, proto)
 		VALUES (true, $1, $2, $3)`, dbPolicy.GetMetadata().GetUid(), dbPolicy.GetMetadata().GetVersion(), protoBytes)
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -49,10 +51,8 @@ func (p *Persistence) CreateGlobalAccessPolicy(ctx context.Context, policy *atea
 		}
 		return nil, fmt.Errorf("inserting global access policy: %w", err)
 	}
-	if p.policyManager != nil {
-		if err := p.policyManager.ReconcileGlobalBindings(authz.ContextWithTx(ctx, tx), dbPolicy.GetBindings()); err != nil {
-			return nil, fmt.Errorf("reconciling global access policy bindings: %w", err)
-		}
+	if err := p.policyManager.ReconcileGlobalBindings(ctx, tx, dbPolicy.GetBindings()); err != nil {
+		return nil, fmt.Errorf("reconciling global access policy bindings: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("committing global access policy create: %w", err)
@@ -61,12 +61,18 @@ func (p *Persistence) CreateGlobalAccessPolicy(ctx context.Context, policy *atea
 }
 
 func (p *Persistence) GetGlobalAccessPolicy(ctx context.Context) (*ateapipb.AccessPolicy, error) {
+	if p.policyManager == nil {
+		return nil, store.ErrAuthzDisabled
+	}
 	return getAccessPolicyRow(ctx, p.pool, `
-		SELECT uid, version, proto FROM global_access_policies
+		SELECT uid, version, proto FROM global_access_policy
 		WHERE id = true`)
 }
 
 func (p *Persistence) UpdateGlobalAccessPolicy(ctx context.Context, precondition store.Precondition, mutate func(*ateapipb.AccessPolicy) error) (*ateapipb.AccessPolicy, error) {
+	if p.policyManager == nil {
+		return nil, store.ErrAuthzDisabled
+	}
 	if err := precondition.Validate(); err != nil {
 		return nil, err
 	}
@@ -78,7 +84,7 @@ func (p *Persistence) UpdateGlobalAccessPolicy(ctx context.Context, precondition
 	defer tx.Rollback(ctx) //nolint:errcheck // no-op once committed
 
 	dbPolicy, err := getAccessPolicyRow(ctx, tx, `
-		SELECT uid, version, proto FROM global_access_policies
+		SELECT uid, version, proto FROM global_access_policy
 		WHERE id = true FOR UPDATE`)
 	if err != nil {
 		return nil, err
@@ -97,15 +103,13 @@ func (p *Persistence) UpdateGlobalAccessPolicy(ctx context.Context, precondition
 		return nil, fmt.Errorf("marshaling updated global access policy: %w", err)
 	}
 	_, err = tx.Exec(ctx, `
-		UPDATE global_access_policies SET version = $1, proto = $2
+		UPDATE global_access_policy SET version = $1, proto = $2
 		WHERE id = true`, dbPolicy.GetMetadata().GetVersion(), protoBytes)
 	if err != nil {
 		return nil, fmt.Errorf("updating global access policy: %w", err)
 	}
-	if p.policyManager != nil {
-		if err := p.policyManager.ReconcileGlobalBindings(authz.ContextWithTx(ctx, tx), dbPolicy.GetBindings()); err != nil {
-			return nil, fmt.Errorf("reconciling global access policy bindings: %w", err)
-		}
+	if err := p.policyManager.ReconcileGlobalBindings(ctx, tx, dbPolicy.GetBindings()); err != nil {
+		return nil, fmt.Errorf("reconciling global access policy bindings: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("committing global access policy update: %w", err)
@@ -114,6 +118,9 @@ func (p *Persistence) UpdateGlobalAccessPolicy(ctx context.Context, precondition
 }
 
 func (p *Persistence) CreateAtespaceAccessPolicy(ctx context.Context, name string, policy *ateapipb.AccessPolicy) (*ateapipb.AccessPolicy, error) {
+	if p.policyManager == nil {
+		return nil, store.ErrAuthzDisabled
+	}
 	dbPolicy := proto.Clone(policy).(*ateapipb.AccessPolicy)
 	dbPolicy.Metadata = newCreateMetadata("", "default")
 	protoBytes, err := proto.Marshal(dbPolicy)
@@ -139,10 +146,8 @@ func (p *Persistence) CreateAtespaceAccessPolicy(ctx context.Context, name strin
 		}
 		return nil, fmt.Errorf("inserting access policy for %s: %w", name, err)
 	}
-	if p.policyManager != nil {
-		if err := p.policyManager.ReconcileAtespaceBindings(authz.ContextWithTx(ctx, tx), name, dbPolicy.GetBindings()); err != nil {
-			return nil, fmt.Errorf("reconciling access policy bindings for %s: %w", name, err)
-		}
+	if err := p.policyManager.ReconcileAtespaceBindings(ctx, tx, name, dbPolicy.GetBindings()); err != nil {
+		return nil, fmt.Errorf("reconciling access policy bindings for %s: %w", name, err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("committing access policy create for %s: %w", name, err)
@@ -151,12 +156,18 @@ func (p *Persistence) CreateAtespaceAccessPolicy(ctx context.Context, name strin
 }
 
 func (p *Persistence) GetAtespaceAccessPolicy(ctx context.Context, name string) (*ateapipb.AccessPolicy, error) {
+	if p.policyManager == nil {
+		return nil, store.ErrAuthzDisabled
+	}
 	return getAccessPolicyRow(ctx, p.pool, `
 		SELECT uid, version, proto FROM atespace_access_policies
 		WHERE atespace_name = $1`, name)
 }
 
 func (p *Persistence) UpdateAtespaceAccessPolicy(ctx context.Context, name string, precondition store.Precondition, mutate func(*ateapipb.AccessPolicy) error) (*ateapipb.AccessPolicy, error) {
+	if p.policyManager == nil {
+		return nil, store.ErrAuthzDisabled
+	}
 	if err := precondition.Validate(); err != nil {
 		return nil, err
 	}
@@ -192,10 +203,8 @@ func (p *Persistence) UpdateAtespaceAccessPolicy(ctx context.Context, name strin
 	if err != nil {
 		return nil, fmt.Errorf("updating access policy for %s: %w", name, err)
 	}
-	if p.policyManager != nil {
-		if err := p.policyManager.ReconcileAtespaceBindings(authz.ContextWithTx(ctx, tx), name, dbPolicy.GetBindings()); err != nil {
-			return nil, fmt.Errorf("reconciling access policy bindings for %s: %w", name, err)
-		}
+	if err := p.policyManager.ReconcileAtespaceBindings(ctx, tx, name, dbPolicy.GetBindings()); err != nil {
+		return nil, fmt.Errorf("reconciling access policy bindings for %s: %w", name, err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("committing access policy update for %s: %w", name, err)
@@ -204,6 +213,9 @@ func (p *Persistence) UpdateAtespaceAccessPolicy(ctx context.Context, name strin
 }
 
 func (p *Persistence) DeleteAtespaceAccessPolicy(ctx context.Context, name string, precondition store.DeletePreconditions) (*ateapipb.AccessPolicy, error) {
+	if p.policyManager == nil {
+		return nil, store.ErrAuthzDisabled
+	}
 	tx, err := p.pool.Begin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("beginning access policy delete for %s: %w", name, err)
@@ -230,10 +242,8 @@ func (p *Persistence) DeleteAtespaceAccessPolicy(ctx context.Context, name strin
 	if err != nil {
 		return nil, err
 	}
-	if p.policyManager != nil {
-		if err := p.policyManager.DeleteAtespacePolicies(authz.ContextWithTx(ctx, tx), name); err != nil {
-			return nil, fmt.Errorf("deleting authorization tuples for %s: %w", name, err)
-		}
+	if err := p.policyManager.DeleteAtespacePolicies(ctx, tx, name); err != nil {
+		return nil, fmt.Errorf("deleting authorization tuples for %s: %w", name, err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("committing access policy delete for %s: %w", name, err)

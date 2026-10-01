@@ -262,8 +262,10 @@ func (p *Persistence) Pool() *pgxpool.Pool {
 	return p.pool
 }
 
-// SetPolicyManager configures the authorization policy manager used to clean up
-// OpenFGA tuples in the same transaction as resource deletions.
+// SetPolicyManager configures the authorization policy manager that writes
+// OpenFGA tuples in the same transaction as access policy and atespace
+// mutations. Access policy operations return store.ErrAuthzDisabled until a
+// policy manager is set.
 func (p *Persistence) SetPolicyManager(pm *authz.PolicyManager) {
 	p.policyManager = pm
 }

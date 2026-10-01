@@ -504,16 +504,16 @@ func TestAuthorizerAndPolicyManager_RuntimeChecks(t *testing.T) {
 		t.Errorf("expected bob allowed can_get on team-x, got %v", err)
 	}
 
-	// 6. PolicyManager.DeleteAtespacePolicies requires an active transaction in ctx,
-	// and removes all tuples on team-x when committed.
-	if err := policyManager.DeleteAtespacePolicies(ctx, "team-x"); err == nil {
-		t.Fatalf("expected DeleteAtespacePolicies without ContextWithTx to fail, got nil")
+	// 6. PolicyManager.DeleteAtespacePolicies requires a transaction, and
+	// removes all tuples on team-x when committed.
+	if err := policyManager.DeleteAtespacePolicies(ctx, nil, "team-x"); !errors.Is(err, ErrNilTransaction) {
+		t.Fatalf("DeleteAtespacePolicies with nil tx = %v, want ErrNilTransaction", err)
 	}
 	txDel, err := pool.Begin(ctx)
 	if err != nil {
 		t.Fatalf("pool.Begin failed: %v", err)
 	}
-	if err := policyManager.DeleteAtespacePolicies(ContextWithTx(ctx, txDel), "team-x"); err != nil {
+	if err := policyManager.DeleteAtespacePolicies(ctx, txDel, "team-x"); err != nil {
 		t.Fatalf("DeleteAtespacePolicies failed: %v", err)
 	}
 	if err := txDel.Commit(ctx); err != nil {

@@ -22,10 +22,15 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"github.com/jackc/pgx/v5"
 	openfgav1 "github.com/openfga/api/proto/openfga/v1"
 	"github.com/openfga/openfga/pkg/server"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
+
+// ErrNilTransaction is returned by PolicyManager tuple writes called without a
+// PostgreSQL transaction.
+var ErrNilTransaction = errors.New("authz: policy tuple writes require a non-nil pgx.Tx")
 
 // GlobalPolicyStore is the persistence interface used by BootstrapGlobalOwners.
 type GlobalPolicyStore interface {
@@ -99,33 +104,21 @@ func bootstrapGlobalOwnersOnce(ctx context.Context, s GlobalPolicyStore, members
 }
 
 // ReconcileGlobalBindings reconciles the OpenFGA role bindings on global:root
-// within the caller's active PostgreSQL transaction.
-func (m *PolicyManager) ReconcileGlobalBindings(ctx context.Context, bindings []*ateapipb.Binding) error {
-	if m == nil {
-		return nil
-	}
-	if _, ok := TxFromContext(ctx); !ok {
-		return ErrNoTransactionInContext
-	}
-	return m.reconcileBindings(ctx, GlobalRootObject, bindings)
+// within tx. The tuple changes commit or roll back with tx.
+func (m *PolicyManager) ReconcileGlobalBindings(ctx context.Context, tx pgx.Tx, bindings []*ateapipb.Binding) error {
+	return m.reconcileBindings(ctx, tx, GlobalRootObject, bindings)
 }
 
 // ReconcileAtespaceBindings reconciles the OpenFGA role bindings on an atespace
-// within the caller's active PostgreSQL transaction.
-func (m *PolicyManager) ReconcileAtespaceBindings(ctx context.Context, name string, bindings []*ateapipb.Binding) error {
-	if m == nil {
-		return nil
-	}
-	if _, ok := TxFromContext(ctx); !ok {
-		return ErrNoTransactionInContext
-	}
-	return m.reconcileBindings(ctx, AtespaceObject(name), bindings)
+// within tx. The tuple changes commit or roll back with tx.
+func (m *PolicyManager) ReconcileAtespaceBindings(ctx context.Context, tx pgx.Tx, name string, bindings []*ateapipb.Binding) error {
+	return m.reconcileBindings(ctx, tx, AtespaceObject(name), bindings)
 }
 
 // DeleteAtespacePolicies removes all OpenFGA tuples associated with an atespace
-// within the caller's active PostgreSQL transaction.
-func (m *PolicyManager) DeleteAtespacePolicies(ctx context.Context, name string) error {
-	return m.ReconcileAtespaceBindings(ctx, name, nil)
+// within tx. The tuple deletions commit or roll back with tx.
+func (m *PolicyManager) DeleteAtespacePolicies(ctx context.Context, tx pgx.Tx, name string) error {
+	return m.reconcileBindings(ctx, tx, AtespaceObject(name), nil)
 }
 
 func (m *PolicyManager) applyMutationsChunked(ctx context.Context, toWrite []*openfgav1.TupleKey, toDelete []*openfgav1.TupleKeyWithoutCondition) error {
@@ -185,9 +178,16 @@ func (m *PolicyManager) readObjectTuples(ctx context.Context, obj string) ([]*op
 }
 
 // reconcileBindings diffs the existing OpenFGA tuples on obj against
-// desiredBindings and writes only the net additions and deletions in batches,
-// leaving unchanged (relation, user) tuples untouched.
-func (m *PolicyManager) reconcileBindings(ctx context.Context, obj string, desiredBindings []*ateapipb.Binding) error {
+// desiredBindings and writes only the net additions and deletions in batches
+// within tx, leaving unchanged (relation, user) tuples untouched.
+func (m *PolicyManager) reconcileBindings(ctx context.Context, tx pgx.Tx, obj string, desiredBindings []*ateapipb.Binding) error {
+	if tx == nil {
+		return ErrNilTransaction
+	}
+	// The OpenFGA server API only carries ctx, so the transactional datastore
+	// reads tx back out of it.
+	ctx = ContextWithTx(ctx, tx)
+
 	existingTuples, err := m.readObjectTuples(ctx, obj)
 	if err != nil {
 		return fmt.Errorf("reading existing tuples for %q: %w", obj, err)

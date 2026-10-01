@@ -25,8 +25,75 @@ import (
 	"google.golang.org/protobuf/testing/protocmp"
 )
 
-func TestGlobalAccessPolicy_Lifecycle(t *testing.T) {
+// setupPostgresPersistenceWithAuthz returns a store with an OpenFGA-backed
+// PolicyManager, which access policy operations require.
+func setupPostgresPersistenceWithAuthz(t *testing.T) *Persistence {
+	t.Helper()
 	p := setupPostgresPersistence(t)
+	fgaServer, err := authz.NewOpenFGAServer(p.pool)
+	if err != nil {
+		t.Fatalf("NewOpenFGAServer failed: %v", err)
+	}
+	t.Cleanup(fgaServer.Close)
+	_, policyManager, err := authz.New(t.Context(), p.pool, fgaServer)
+	if err != nil {
+		t.Fatalf("authz.New failed: %v", err)
+	}
+	p.SetPolicyManager(policyManager)
+	return p
+}
+
+func TestAccessPolicy_AuthzDisabled(t *testing.T) {
+	p := setupPostgresPersistence(t)
+	ctx := t.Context()
+	createTestAtespace(t, p, "team-a")
+	policy := &ateapipb.AccessPolicy{
+		Bindings: []*ateapipb.Binding{{Role: authz.RoleOwner, Members: []string{"user:alice"}}},
+	}
+	noop := func(*ateapipb.AccessPolicy) error { return nil }
+	pre := store.Precondition{UID: "uid", Version: 1}
+
+	ops := map[string]func() error{
+		"CreateGlobalAccessPolicy": func() error { _, err := p.CreateGlobalAccessPolicy(ctx, policy); return err },
+		"GetGlobalAccessPolicy":    func() error { _, err := p.GetGlobalAccessPolicy(ctx); return err },
+		"UpdateGlobalAccessPolicy": func() error { _, err := p.UpdateGlobalAccessPolicy(ctx, pre, noop); return err },
+		"CreateAtespaceAccessPolicy": func() error {
+			_, err := p.CreateAtespaceAccessPolicy(ctx, "team-a", policy)
+			return err
+		},
+		"GetAtespaceAccessPolicy": func() error { _, err := p.GetAtespaceAccessPolicy(ctx, "team-a"); return err },
+		"UpdateAtespaceAccessPolicy": func() error {
+			_, err := p.UpdateAtespaceAccessPolicy(ctx, "team-a", pre, noop)
+			return err
+		},
+		"DeleteAtespaceAccessPolicy": func() error {
+			_, err := p.DeleteAtespaceAccessPolicy(ctx, "team-a", store.DeletePreconditions{})
+			return err
+		},
+	}
+	for name, op := range ops {
+		if err := op(); !errors.Is(err, store.ErrAuthzDisabled) {
+			t.Errorf("%s without a policy manager = %v, want ErrAuthzDisabled", name, err)
+		}
+	}
+
+	// Nothing was written, so no policy row exists to drift from the tuples.
+	var n int
+	if err := p.pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM global_access_policy) + (SELECT count(*) FROM atespace_access_policies)`).Scan(&n); err != nil {
+		t.Fatalf("counting access policy rows: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("access policy rows = %d, want 0", n)
+	}
+
+	// Atespaces stay deletable with authorization disabled.
+	if _, err := p.DeleteAtespace(ctx, "team-a", store.DeletePreconditions{}); err != nil {
+		t.Errorf("DeleteAtespace without a policy manager failed: %v", err)
+	}
+}
+
+func TestGlobalAccessPolicy_Lifecycle(t *testing.T) {
+	p := setupPostgresPersistenceWithAuthz(t)
 	ctx := t.Context()
 
 	if _, err := p.GetGlobalAccessPolicy(ctx); !errors.Is(err, store.ErrNotFound) {
@@ -81,7 +148,7 @@ func TestGlobalAccessPolicy_Lifecycle(t *testing.T) {
 }
 
 func TestAtespaceAccessPolicy_LifecycleAndCascade(t *testing.T) {
-	p := setupPostgresPersistence(t)
+	p := setupPostgresPersistenceWithAuthz(t)
 	ctx := t.Context()
 
 	policy := &ateapipb.AccessPolicy{

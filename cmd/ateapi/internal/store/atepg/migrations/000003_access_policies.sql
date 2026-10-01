@@ -14,7 +14,8 @@
 
 -- +goose Up
 
-CREATE TABLE global_access_policies (
+-- Singleton: the id column only admits true, so the table holds at most one row.
+CREATE TABLE global_access_policy (
     id      boolean PRIMARY KEY DEFAULT true CHECK (id),
     uid     text NOT NULL,
     version bigint NOT NULL,

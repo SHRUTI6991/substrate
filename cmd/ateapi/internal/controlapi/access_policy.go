@@ -51,6 +51,9 @@ func (s *ServiceImpl) GetGlobalAccessPolicy(ctx context.Context) (*ateapipb.Acce
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, status.Error(codes.NotFound, "Global AccessPolicy not found")
 		}
+		if errors.Is(err, store.ErrAuthzDisabled) {
+			return nil, errAccessPolicyAuthzDisabled
+		}
 		return nil, fmt.Errorf("while getting Global access policy: %w", err)
 	}
 	return policy, nil
@@ -126,6 +129,9 @@ func (s *ServiceImpl) GetAtespaceAccessPolicy(ctx context.Context, name string) 
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, status.Errorf(codes.NotFound, "AccessPolicy for atespace %s not found", name)
+		}
+		if errors.Is(err, store.ErrAuthzDisabled) {
+			return nil, errAccessPolicyAuthzDisabled
 		}
 		return nil, fmt.Errorf("while getting Atespace access policy: %w", err)
 	}
@@ -299,7 +305,26 @@ func mapAccessPolicyWrite(policy *ateapipb.AccessPolicy, err error) (*ateapipb.A
 		return nil, status.Error(codes.InvalidArgument, "AccessPolicy UID and version are required")
 	case errors.Is(err, store.ErrFailedPrecondition):
 		return nil, status.Error(codes.FailedPrecondition, "parent Atespace does not exist")
+	case errors.Is(err, store.ErrAuthzDisabled):
+		return nil, errAccessPolicyAuthzDisabled
 	default:
-		return nil, fmt.Errorf("while writing AccessPolicy: %w", err)
+		return nil, toCanonicalStatus(fmt.Errorf("while writing AccessPolicy: %w", err))
 	}
+}
+
+// errAccessPolicyAuthzDisabled is returned by every AccessPolicy RPC when the
+// server runs without authorization, since policy writes would not reach the
+// authorization tuples.
+var errAccessPolicyAuthzDisabled = status.Error(codes.FailedPrecondition, "AccessPolicy API requires --experimental-enable-authz")
+
+// toCanonicalStatus passes err through when it carries a canonical gRPC code
+// (including a plain error, which gRPC reports as Unknown), and reports
+// anything else as Internal. Backends such as OpenFGA return statuses with
+// nonstandard codes (for example Code(2000)) that clients cannot interpret.
+func toCanonicalStatus(err error) error {
+	st, ok := status.FromError(err)
+	if !ok || st.Code() <= codes.Unauthenticated {
+		return err
+	}
+	return status.Error(codes.Internal, err.Error())
 }

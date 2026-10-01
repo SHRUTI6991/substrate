@@ -19,7 +19,6 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/authz"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/jackc/pgx/v5"
@@ -144,8 +143,10 @@ func (p *Persistence) DeleteAtespace(ctx context.Context, name string, precondit
 		}
 		return nil, fmt.Errorf("deleting atespace %q: %w", name, err)
 	}
+	// Atespaces are served with authorization disabled, in which case there
+	// are no tuples to clean up.
 	if p.policyManager != nil {
-		if err := p.policyManager.DeleteAtespacePolicies(authz.ContextWithTx(ctx, tx), name); err != nil {
+		if err := p.policyManager.DeleteAtespacePolicies(ctx, tx, name); err != nil {
 			return nil, fmt.Errorf("deleting authorization tuples for atespace %q: %w", name, err)
 		}
 	}
