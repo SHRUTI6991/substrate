@@ -16,6 +16,8 @@ package atepg
 
 import (
 	"errors"
+	"slices"
+	"sync"
 	"testing"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/authz"
@@ -25,75 +27,8 @@ import (
 	"google.golang.org/protobuf/testing/protocmp"
 )
 
-// setupPostgresPersistenceWithAuthz returns a store with an OpenFGA-backed
-// PolicyManager, which access policy operations require.
-func setupPostgresPersistenceWithAuthz(t *testing.T) *Persistence {
-	t.Helper()
-	p := setupPostgresPersistence(t)
-	fgaServer, err := authz.NewOpenFGAServer(p.pool)
-	if err != nil {
-		t.Fatalf("NewOpenFGAServer failed: %v", err)
-	}
-	t.Cleanup(fgaServer.Close)
-	_, policyManager, err := authz.New(t.Context(), p.pool, fgaServer, nil)
-	if err != nil {
-		t.Fatalf("authz.New failed: %v", err)
-	}
-	p.SetPolicyManager(policyManager)
-	return p
-}
-
-func TestAccessPolicy_AuthzDisabled(t *testing.T) {
-	p := setupPostgresPersistence(t)
-	ctx := t.Context()
-	createTestAtespace(t, p, "team-a")
-	policy := &ateapipb.AccessPolicy{
-		Bindings: []*ateapipb.Binding{{Role: authz.RoleOwner, Members: []string{"user:alice"}}},
-	}
-	noop := func(*ateapipb.AccessPolicy) error { return nil }
-	pre := store.Precondition{UID: "uid", Version: 1}
-
-	ops := map[string]func() error{
-		"CreateGlobalAccessPolicy": func() error { _, err := p.CreateGlobalAccessPolicy(ctx, policy); return err },
-		"GetGlobalAccessPolicy":    func() error { _, err := p.GetGlobalAccessPolicy(ctx); return err },
-		"UpdateGlobalAccessPolicy": func() error { _, err := p.UpdateGlobalAccessPolicy(ctx, pre, noop); return err },
-		"CreateAtespaceAccessPolicy": func() error {
-			_, err := p.CreateAtespaceAccessPolicy(ctx, "team-a", policy)
-			return err
-		},
-		"GetAtespaceAccessPolicy": func() error { _, err := p.GetAtespaceAccessPolicy(ctx, "team-a"); return err },
-		"UpdateAtespaceAccessPolicy": func() error {
-			_, err := p.UpdateAtespaceAccessPolicy(ctx, "team-a", pre, noop)
-			return err
-		},
-		"DeleteAtespaceAccessPolicy": func() error {
-			_, err := p.DeleteAtespaceAccessPolicy(ctx, "team-a", store.DeletePreconditions{})
-			return err
-		},
-	}
-	for name, op := range ops {
-		if err := op(); !errors.Is(err, store.ErrAuthzDisabled) {
-			t.Errorf("%s without a policy manager = %v, want ErrAuthzDisabled", name, err)
-		}
-	}
-
-	// Nothing was written, so no policy row exists to drift from the tuples.
-	var n int
-	if err := p.pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM global_access_policy) + (SELECT count(*) FROM atespace_access_policies)`).Scan(&n); err != nil {
-		t.Fatalf("counting access policy rows: %v", err)
-	}
-	if n != 0 {
-		t.Errorf("access policy rows = %d, want 0", n)
-	}
-
-	// Atespaces stay deletable with authorization disabled.
-	if _, err := p.DeleteAtespace(ctx, "team-a", store.DeletePreconditions{}); err != nil {
-		t.Errorf("DeleteAtespace without a policy manager failed: %v", err)
-	}
-}
-
 func TestGlobalAccessPolicy_Lifecycle(t *testing.T) {
-	p := setupPostgresPersistenceWithAuthz(t)
+	p := setupPostgresPersistence(t)
 	ctx := t.Context()
 
 	if _, err := p.GetGlobalAccessPolicy(ctx); !errors.Is(err, store.ErrNotFound) {
@@ -148,7 +83,7 @@ func TestGlobalAccessPolicy_Lifecycle(t *testing.T) {
 }
 
 func TestAtespaceAccessPolicy_LifecycleAndCascade(t *testing.T) {
-	p := setupPostgresPersistenceWithAuthz(t)
+	p := setupPostgresPersistence(t)
 	ctx := t.Context()
 
 	policy := &ateapipb.AccessPolicy{
@@ -213,4 +148,111 @@ func TestAtespaceAccessPolicy_LifecycleAndCascade(t *testing.T) {
 	if _, err := p.GetAtespaceAccessPolicy(ctx, "team-a"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("GetAtespaceAccessPolicy after DeleteAtespace = %v, want ErrNotFound", err)
 	}
+}
+
+// globalTuples returns the stored OpenFGA tuples on global:root as
+// "relation user" strings, read straight from the tuple table.
+func globalTuples(t *testing.T, p *Persistence) []string {
+	t.Helper()
+	rows, err := p.pool.Query(t.Context(), `SELECT relation, _user FROM tuple WHERE object_type = 'global' AND object_id = 'root'`)
+	if err != nil {
+		t.Fatalf("reading tuples: %v", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var relation, user string
+		if err := rows.Scan(&relation, &user); err != nil {
+			t.Fatalf("scanning tuple: %v", err)
+		}
+		out = append(out, relation+" "+user)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("reading tuples: %v", err)
+	}
+	slices.Sort(out)
+	return out
+}
+
+// TestGlobalAccessPolicy_UpdateIsAtomic checks that the policy row and its
+// OpenFGA tuples commit or roll back together.
+func TestGlobalAccessPolicy_UpdateIsAtomic(t *testing.T) {
+	p := setupPostgresPersistence(t)
+	ctx := t.Context()
+
+	created, err := p.CreateGlobalAccessPolicy(ctx, &ateapipb.AccessPolicy{
+		Metadata: &ateapipb.ResourceMetadata{Name: "default"},
+		Bindings: []*ateapipb.Binding{{Role: authz.RoleOwner, Members: []string{"user:alice"}}},
+	})
+	if err != nil {
+		t.Fatalf("CreateGlobalAccessPolicy failed: %v", err)
+	}
+	wantTuples := []string{"owner user:alice"}
+	if diff := cmp.Diff(wantTuples, globalTuples(t, p)); diff != "" {
+		t.Fatalf("tuples after create (-want +got):\n%s", diff)
+	}
+	pre := store.Precondition{UID: created.GetMetadata().GetUid(), Version: created.GetMetadata().GetVersion()}
+
+	t.Run("failed tuple write rolls back the row and earlier tuple deletes", func(t *testing.T) {
+		// Reconciling deletes alice's tuple and then fails writing a relation
+		// the model does not define, after the row UPDATE has run.
+		_, err := p.UpdateGlobalAccessPolicy(ctx, pre, func(ap *ateapipb.AccessPolicy) error {
+			ap.Bindings = []*ateapipb.Binding{{Role: "not-a-relation", Members: []string{"user:bob"}}}
+			return nil
+		})
+		if err == nil {
+			t.Fatal("UpdateGlobalAccessPolicy with an undefined relation succeeded, want an error")
+		}
+		got, err := p.GetGlobalAccessPolicy(ctx)
+		if err != nil {
+			t.Fatalf("GetGlobalAccessPolicy failed: %v", err)
+		}
+		if diff := cmp.Diff(created, got, protocmp.Transform()); diff != "" {
+			t.Errorf("policy row changed by failed update (-want +got):\n%s", diff)
+		}
+		if diff := cmp.Diff(wantTuples, globalTuples(t, p)); diff != "" {
+			t.Errorf("tuples changed by failed update (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("concurrent updates leave tuples matching the winning row", func(t *testing.T) {
+		members := []string{"user:bob", "user:carol"}
+		errs := make([]error, len(members))
+		var wg sync.WaitGroup
+		for i, member := range members {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				_, errs[i] = p.UpdateGlobalAccessPolicy(ctx, pre, func(ap *ateapipb.AccessPolicy) error {
+					ap.Bindings = []*ateapipb.Binding{{Role: authz.RoleOwner, Members: []string{member}}}
+					return nil
+				})
+			}()
+		}
+		wg.Wait()
+
+		winners := 0
+		for i, err := range errs {
+			switch {
+			case err == nil:
+				winners++
+			case !errors.Is(err, store.ErrVersionConflict):
+				t.Errorf("update %d = %v, want nil or ErrVersionConflict", i, err)
+			}
+		}
+		if winners != 1 {
+			t.Fatalf("%d updates succeeded, want exactly 1 (errs: %v)", winners, errs)
+		}
+		got, err := p.GetGlobalAccessPolicy(ctx)
+		if err != nil {
+			t.Fatalf("GetGlobalAccessPolicy failed: %v", err)
+		}
+		if got.GetMetadata().GetVersion() != pre.Version+1 {
+			t.Errorf("version = %d, want %d", got.GetMetadata().GetVersion(), pre.Version+1)
+		}
+		want := []string{"owner " + got.GetBindings()[0].GetMembers()[0]}
+		if diff := cmp.Diff(want, globalTuples(t, p)); diff != "" {
+			t.Errorf("tuples do not match the committed row (-row +tuples):\n%s", diff)
+		}
+	})
 }

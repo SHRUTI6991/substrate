@@ -26,9 +26,6 @@ import (
 )
 
 func (p *Persistence) CreateGlobalAccessPolicy(ctx context.Context, policy *ateapipb.AccessPolicy) (*ateapipb.AccessPolicy, error) {
-	if p.policyManager == nil {
-		return nil, store.ErrAuthzDisabled
-	}
 	dbPolicy := proto.Clone(policy).(*ateapipb.AccessPolicy)
 	dbPolicy.Metadata = newCreateMetadata("", "default")
 	protoBytes, err := proto.Marshal(dbPolicy)
@@ -61,18 +58,12 @@ func (p *Persistence) CreateGlobalAccessPolicy(ctx context.Context, policy *atea
 }
 
 func (p *Persistence) GetGlobalAccessPolicy(ctx context.Context) (*ateapipb.AccessPolicy, error) {
-	if p.policyManager == nil {
-		return nil, store.ErrAuthzDisabled
-	}
 	return getAccessPolicyRow(ctx, p.pool, `
 		SELECT uid, version, proto FROM global_access_policy
 		WHERE id = true`)
 }
 
 func (p *Persistence) UpdateGlobalAccessPolicy(ctx context.Context, precondition store.Precondition, mutate func(*ateapipb.AccessPolicy) error) (*ateapipb.AccessPolicy, error) {
-	if p.policyManager == nil {
-		return nil, store.ErrAuthzDisabled
-	}
 	if err := precondition.Validate(); err != nil {
 		return nil, err
 	}
@@ -118,9 +109,6 @@ func (p *Persistence) UpdateGlobalAccessPolicy(ctx context.Context, precondition
 }
 
 func (p *Persistence) CreateAtespaceAccessPolicy(ctx context.Context, name string, policy *ateapipb.AccessPolicy) (*ateapipb.AccessPolicy, error) {
-	if p.policyManager == nil {
-		return nil, store.ErrAuthzDisabled
-	}
 	dbPolicy := proto.Clone(policy).(*ateapipb.AccessPolicy)
 	dbPolicy.Metadata = newCreateMetadata("", "default")
 	protoBytes, err := proto.Marshal(dbPolicy)
@@ -156,18 +144,12 @@ func (p *Persistence) CreateAtespaceAccessPolicy(ctx context.Context, name strin
 }
 
 func (p *Persistence) GetAtespaceAccessPolicy(ctx context.Context, name string) (*ateapipb.AccessPolicy, error) {
-	if p.policyManager == nil {
-		return nil, store.ErrAuthzDisabled
-	}
 	return getAccessPolicyRow(ctx, p.pool, `
 		SELECT uid, version, proto FROM atespace_access_policies
 		WHERE atespace_name = $1`, name)
 }
 
 func (p *Persistence) UpdateAtespaceAccessPolicy(ctx context.Context, name string, precondition store.Precondition, mutate func(*ateapipb.AccessPolicy) error) (*ateapipb.AccessPolicy, error) {
-	if p.policyManager == nil {
-		return nil, store.ErrAuthzDisabled
-	}
 	if err := precondition.Validate(); err != nil {
 		return nil, err
 	}
@@ -213,9 +195,6 @@ func (p *Persistence) UpdateAtespaceAccessPolicy(ctx context.Context, name strin
 }
 
 func (p *Persistence) DeleteAtespaceAccessPolicy(ctx context.Context, name string, precondition store.DeletePreconditions) (*ateapipb.AccessPolicy, error) {
-	if p.policyManager == nil {
-		return nil, store.ErrAuthzDisabled
-	}
 	tx, err := p.pool.Begin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("beginning access policy delete for %s: %w", name, err)

@@ -62,12 +62,6 @@ var (
 	// ErrImmutableField indicates an update's mutation changed a field that is
 	// immutable for the lifetime of the stored object.
 	ErrImmutableField = errors.New("persistence: immutable field")
-
-	// ErrAuthzDisabled indicates an access policy operation was called on a
-	// store with no authorization policy manager. Access policies are only
-	// served when authorization is enabled, so stored policies and their
-	// authorization tuples cannot drift apart.
-	ErrAuthzDisabled = errors.New("persistence: authorization disabled")
 )
 
 // Interface defines the contract for the persistence layer storing actor state.

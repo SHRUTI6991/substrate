@@ -36,8 +36,6 @@ func TestMapAccessPolicyWrite_Codes(t *testing.T) {
 		err  error
 		want codes.Code
 	}{
-		{name: "authz disabled", err: store.ErrAuthzDisabled, want: codes.FailedPrecondition},
-		{name: "wrapped authz disabled", err: fmt.Errorf("op: %w", store.ErrAuthzDisabled), want: codes.FailedPrecondition},
 		{name: "nonstandard backend code", err: openFGAErr, want: codes.Internal},
 		{name: "wrapped nonstandard backend code", err: fmt.Errorf("reconciling: %w", openFGAErr), want: codes.Internal},
 		{name: "canonical status passes through", err: status.Error(codes.InvalidArgument, "bad"), want: codes.InvalidArgument},

@@ -18,6 +18,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/authz"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
@@ -40,7 +41,24 @@ func setupPostgresPersistence(t *testing.T) *Persistence {
 	}
 	t.Cleanup(p.Close)
 	clearAll(t, p)
+	setTestPolicyManager(t, p)
 	return p
+}
+
+// setTestPolicyManager gives p an OpenFGA-backed PolicyManager, as the server
+// always does.
+func setTestPolicyManager(t *testing.T, p *Persistence) {
+	t.Helper()
+	fgaServer, err := authz.NewOpenFGAServer(p.pool)
+	if err != nil {
+		t.Fatalf("NewOpenFGAServer failed: %v", err)
+	}
+	t.Cleanup(fgaServer.Close)
+	_, policyManager, err := authz.New(t.Context(), p.pool, fgaServer, nil)
+	if err != nil {
+		t.Fatalf("authz.New failed: %v", err)
+	}
+	p.SetPolicyManager(policyManager)
 }
 
 func newTestAtespace(name string) *ateapipb.Atespace {

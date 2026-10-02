@@ -48,7 +48,7 @@ func TestAccessPolicy_GlobalAndAtespaceGovernance(t *testing.T) {
 	persistence.SetPolicyManager(policyManager)
 
 	svc := NewRPCService(persistence, nil, nil, nil, nil, nil, nil, "", nil, nil, "", nil, nil)
-	interceptor := authz.UnaryServerInterceptor(authorizer)
+	interceptor := authz.UnaryServerInterceptor(authorizer, true)
 
 	userCtx := func(id string) context.Context {
 		return principal.InjectContext(ctx, principal.PrincipalInfo{
@@ -199,7 +199,7 @@ func TestAccessPolicy_GlobalAndAtespaceGovernance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("authz.New after restart failed: %v", err)
 	}
-	restartedInterceptor := authz.UnaryServerInterceptor(restarted)
+	restartedInterceptor := authz.UnaryServerInterceptor(restarted, true)
 	getGlobalAfterRestart := func(c context.Context) error {
 		_, err := restartedInterceptor(c, &ateapipb.GetGlobalAccessPolicyRequest{}, &grpc.UnaryServerInfo{FullMethod: ateapipb.Control_GetGlobalAccessPolicy_FullMethodName}, func(c context.Context, r any) (any, error) {
 			return svc.GetGlobalAccessPolicy(c, r.(*ateapipb.GetGlobalAccessPolicyRequest))

@@ -143,12 +143,8 @@ func (p *Persistence) DeleteAtespace(ctx context.Context, name string, precondit
 		}
 		return nil, fmt.Errorf("deleting atespace %q: %w", name, err)
 	}
-	// Atespaces are served with authorization disabled, in which case there
-	// are no tuples to clean up.
-	if p.policyManager != nil {
-		if err := p.policyManager.DeleteAtespacePolicies(ctx, tx, name); err != nil {
-			return nil, fmt.Errorf("deleting authorization tuples for atespace %q: %w", name, err)
-		}
+	if err := p.policyManager.DeleteAtespacePolicies(ctx, tx, name); err != nil {
+		return nil, fmt.Errorf("deleting authorization tuples for atespace %q: %w", name, err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("committing atespace delete %q: %w", name, err)
