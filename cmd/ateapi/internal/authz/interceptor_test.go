@@ -150,7 +150,7 @@ func TestUnaryServerInterceptor_QuickRejectionAndDispatch(t *testing.T) {
 	}
 }
 
-func TestUnaryServerInterceptor_MalformedRequestRequiresPrincipalThenDelegatesValidation(t *testing.T) {
+func TestUnaryServerInterceptor_MalformedRequestRequiresPrincipalThenFailsClosed(t *testing.T) {
 	authorizer := setupTestAuthorizer(t)
 	interceptor := UnaryServerInterceptor(authorizer, true)
 
@@ -165,23 +165,22 @@ func TestUnaryServerInterceptor_MalformedRequestRequiresPrincipalThenDelegatesVa
 		t.Fatalf("expected Unauthenticated for missing principal, got %v", err)
 	}
 
-	// 2. Authenticated caller with empty atespace name -> delegates to handler for InvalidArgument
+	// 2. Authenticated caller with empty or invalid atespace name ->
+	// InvalidArgument without calling the handler or OpenFGA.
 	authCtx := principal.InjectContext(context.Background(), principal.PrincipalInfo{
 		ID:   "alice@example.com",
 		Kind: principal.KindJWT,
 	})
-	handlerCalled := false
-	_, err = interceptor(authCtx, &ateapipb.GetAtespaceRequest{}, &grpc.UnaryServerInfo{
-		FullMethod: ateapipb.Control_GetAtespace_FullMethodName,
-	}, func(ctx context.Context, req any) (any, error) {
-		handlerCalled = true
-		return nil, status.Error(codes.InvalidArgument, "atespace.name is required")
-	})
-	if !handlerCalled {
-		t.Fatal("expected handler to be invoked to return validation error")
-	}
-	if status.Code(err) != codes.InvalidArgument {
-		t.Fatalf("expected InvalidArgument from handler, got %v", err)
+	for _, name := range []string{"", "team\n1"} {
+		_, err = interceptor(authCtx, &ateapipb.GetAtespaceRequest{Atespace: &ateapipb.ObjectRef{Name: name}}, &grpc.UnaryServerInfo{
+			FullMethod: ateapipb.Control_GetAtespace_FullMethodName,
+		}, func(ctx context.Context, req any) (any, error) {
+			t.Fatalf("handler must not be invoked for atespace name %q", name)
+			return nil, nil
+		})
+		if status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("atespace name %q: expected InvalidArgument, got %v", name, err)
+		}
 	}
 
 	// 3. Unexpected request type for a registered RPC -> fails closed with codes.Internal without calling handler
