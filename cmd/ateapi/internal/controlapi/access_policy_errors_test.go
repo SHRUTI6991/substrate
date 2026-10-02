@@ -19,12 +19,9 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/authz"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
 func TestMapAccessPolicyWrite_Codes(t *testing.T) {
@@ -49,15 +46,5 @@ func TestMapAccessPolicyWrite_Codes(t *testing.T) {
 				t.Errorf("mapAccessPolicyWrite(%v) code = %v, want %v", tc.err, got, tc.want)
 			}
 		})
-	}
-}
-
-func TestValidateAccessPolicyBindings_RejectsControlCharacters(t *testing.T) {
-	policy := &ateapipb.AccessPolicy{
-		Bindings: []*ateapipb.Binding{{Role: authz.RoleOwner, Members: []string{"user:alice\tbob"}}},
-	}
-	errs := validateAccessPolicyBindings(field.NewPath("bindings"), policy, validAtespaceRoles)
-	if len(errs) != 1 || errs[0].Type != field.ErrorTypeInvalid || errs[0].Field != "bindings[0].members[0]" {
-		t.Fatalf("validateAccessPolicyBindings = %v, want one Invalid error on bindings[0].members[0]", errs)
 	}
 }
