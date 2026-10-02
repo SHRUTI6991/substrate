@@ -295,7 +295,9 @@ func TestUnaryServerInterceptor_ActorAndTemplateChecks(t *testing.T) {
 		t.Fatalf("NewOpenFGAServer failed: %v", err)
 	}
 	t.Cleanup(fgaServer.Close)
-	authorizer, policyManager, err := New(ctx, pool, fgaServer, nil)
+	// bootstrap-owner is a global owner through configuration only; it has no
+	// stored tuples.
+	authorizer, policyManager, err := New(ctx, pool, fgaServer, []string{"bootstrap-owner"})
 	if err != nil {
 		t.Fatalf("New failed: %v", err)
 	}
@@ -392,6 +394,26 @@ func TestUnaryServerInterceptor_ActorAndTemplateChecks(t *testing.T) {
 		{"shared viewer lists templates in shared", "shared-viewer", listTemplates("shared"), codes.OK},
 		{"atespace viewer cannot list all templates", "shared-viewer", listTemplates(""), codes.PermissionDenied},
 		{"global owner lists all templates", "global-owner", listTemplates(""), codes.OK},
+
+		// Global owners reach actors and templates through the contextual
+		// actor -> atespace -> global:root links. The bootstrap owner has no
+		// stored tuples at all, so every hop of its path is contextual.
+		{"global owner gets actor", "global-owner", getActor, codes.OK},
+		{"global owner updates actor", "global-owner", updateActor(local), codes.OK},
+		{"global owner deletes actor", "global-owner", deleteActor, codes.OK},
+		{"global owner gets template", "global-owner", getTemplate(local), codes.OK},
+		{"global owner deletes template", "global-owner", deleteTemplate, codes.OK},
+		{"bootstrap owner creates actor", "bootstrap-owner", createActor(shared), codes.OK},
+		{"bootstrap owner gets actor", "bootstrap-owner", getActor, codes.OK},
+		{"bootstrap owner updates actor", "bootstrap-owner", updateActor(shared), codes.OK},
+		{"bootstrap owner deletes actor", "bootstrap-owner", deleteActor, codes.OK},
+		{"bootstrap owner gets template", "bootstrap-owner", getTemplate(shared), codes.OK},
+		{"bootstrap owner deletes template", "bootstrap-owner", deleteTemplate, codes.OK},
+		{"bootstrap owner lists all actors", "bootstrap-owner", listActors(""), codes.OK},
+		{"global viewer gets actor", "global-viewer", getActor, codes.OK},
+		{"global viewer cannot update actor", "global-viewer", updateActor(local), codes.PermissionDenied},
+		{"global viewer cannot delete actor", "global-viewer", deleteActor, codes.PermissionDenied},
+		{"global viewer cannot delete template", "global-viewer", deleteTemplate, codes.PermissionDenied},
 	}
 
 	interceptor := UnaryServerInterceptor(authorizer, true)
