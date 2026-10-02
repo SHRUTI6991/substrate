@@ -18,7 +18,9 @@ import (
 	"slices"
 
 	"github.com/agent-substrate/substrate/internal/apierror"
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
 // check is one OpenFGA permission check: the caller must have relation on object.
@@ -28,64 +30,92 @@ type check struct {
 }
 
 // checkExtractor returns the checks a request must pass; the interceptor allows
-// the request only if all of them pass. A check whose resource identifier is
-// missing from a malformed request is left out, so the handler's field
-// validation returns codes.InvalidArgument for it. If no checks remain, the
-// interceptor verifies caller authentication and delegates to the handler.
-// If err is non-nil (e.g., unexpected request protobuf type), the interceptor fails closed.
+// the request only if all of them pass. Every resource identifier a check
+// needs must be present and a valid resource name, otherwise the extractor
+// returns codes.InvalidArgument: a check is never skipped, and OpenFGA never
+// sees an object ID it would reject. Any other error (e.g., an unexpected
+// request protobuf type) is codes.Internal, and the interceptor fails closed.
 type checkExtractor func(req any) ([]check, error)
 
 // checksOf adapts checksFor, written against the concrete request type T, into
 // a checkExtractor.
-func checksOf[T any](checksFor func(T) []check) checkExtractor {
+func checksOf[T any](checksFor func(T) ([]check, field.ErrorList)) checkExtractor {
 	return func(req any) ([]check, error) {
 		r, ok := req.(T)
 		if !ok {
 			return nil, apierror.Internal("authz: unexpected request type %T", req)
 		}
-		return checksFor(r), nil
+		checks, errs := checksFor(r)
+		if len(errs) > 0 {
+			return nil, resources.ToAPIError(errs)
+		}
+		return checks, nil
 	}
 }
 
-func onGlobal(relation string) []check {
-	return []check{{relation: relation, object: GlobalRootObject}}
+// validateName requires name to be a non-empty, valid resource name.
+func validateName(name string, fldPath *field.Path) field.ErrorList {
+	if name == "" {
+		return field.ErrorList{field.Required(fldPath, "")}
+	}
+	return resources.ValidateResourceName(name, fldPath)
 }
 
-func onAtespace(relation, atespace string) []check {
-	if atespace == "" {
-		return nil
+func onGlobal(relation string) ([]check, field.ErrorList) {
+	return []check{{relation: relation, object: GlobalRootObject}}, nil
+}
+
+func onAtespace(relation, atespace string, fldPath *field.Path) ([]check, field.ErrorList) {
+	if errs := validateName(atespace, fldPath); len(errs) > 0 {
+		return nil, errs
 	}
-	return []check{{relation: relation, object: AtespaceObject(atespace)}}
+	return []check{{relation: relation, object: AtespaceObject(atespace)}}, nil
 }
 
 // onAtespaceOrGlobal checks relation on the atespace, or on global:root when
 // atespace is empty (List RPCs that span all atespaces).
-func onAtespaceOrGlobal(relation, atespace string) []check {
+func onAtespaceOrGlobal(relation, atespace string, fldPath *field.Path) ([]check, field.ErrorList) {
 	if atespace == "" {
 		return onGlobal(relation)
 	}
-	return onAtespace(relation, atespace)
+	return onAtespace(relation, atespace, fldPath)
 }
 
 // resourceRef identifies an atespaced resource. Both *ateapipb.ObjectRef and
-// *ateapipb.ResourceMetadata satisfy it.
+// *ateapipb.ResourceMetadata satisfy it, including as nil pointers.
 type resourceRef interface {
 	GetAtespace() string
 	GetName() string
 }
 
-func onActor(relation string, ref resourceRef) []check {
-	if ref.GetAtespace() == "" || ref.GetName() == "" {
-		return nil
-	}
-	return []check{{relation: relation, object: ActorObject(ref.GetAtespace(), ref.GetName())}}
+func validateRef(ref resourceRef, fldPath *field.Path) field.ErrorList {
+	return append(
+		validateName(ref.GetAtespace(), fldPath.Child("atespace")),
+		validateName(ref.GetName(), fldPath.Child("name"))...,
+	)
 }
 
-func onActorTemplate(relation string, ref resourceRef) []check {
-	if ref.GetAtespace() == "" || ref.GetName() == "" {
-		return nil
+func onActor(relation string, ref resourceRef, fldPath *field.Path) ([]check, field.ErrorList) {
+	if errs := validateRef(ref, fldPath); len(errs) > 0 {
+		return nil, errs
 	}
-	return []check{{relation: relation, object: ActorTemplateObject(ref.GetAtespace(), ref.GetName())}}
+	return []check{{relation: relation, object: ActorObject(ref.GetAtespace(), ref.GetName())}}, nil
+}
+
+func onActorTemplate(relation string, ref resourceRef, fldPath *field.Path) ([]check, field.ErrorList) {
+	if errs := validateRef(ref, fldPath); len(errs) > 0 {
+		return nil, errs
+	}
+	return []check{{relation: relation, object: ActorTemplateObject(ref.GetAtespace(), ref.GetName())}}, nil
+}
+
+// both requires the checks from a and b, reporting the validation errors of
+// both.
+func both(aChecks []check, aErrs field.ErrorList, bChecks []check, bErrs field.ErrorList) ([]check, field.ErrorList) {
+	if errs := append(aErrs, bErrs...); len(errs) > 0 {
+		return nil, errs
+	}
+	return slices.Concat(aChecks, bChecks), nil
 }
 
 // rpcRule is the permission rule for one RPC.
@@ -109,77 +139,75 @@ func governance(extract checkExtractor) rpcRule {
 // to their permission rules.
 var defaultRPCPermissions = map[string]rpcRule{
 	// Atespaces.
-	ateapipb.Control_CreateAtespace_FullMethodName: rule(checksOf(func(*ateapipb.CreateAtespaceRequest) []check {
+	ateapipb.Control_CreateAtespace_FullMethodName: rule(checksOf(func(*ateapipb.CreateAtespaceRequest) ([]check, field.ErrorList) {
 		return onGlobal(RelationCanCreateAtespace)
 	})),
-	ateapipb.Control_ListAtespaces_FullMethodName: rule(checksOf(func(*ateapipb.ListAtespacesRequest) []check {
+	ateapipb.Control_ListAtespaces_FullMethodName: rule(checksOf(func(*ateapipb.ListAtespacesRequest) ([]check, field.ErrorList) {
 		return onGlobal(RelationCanListAtespaces)
 	})),
-	ateapipb.Control_GetAtespace_FullMethodName: rule(checksOf(func(r *ateapipb.GetAtespaceRequest) []check {
-		return onAtespace(RelationCanGet, r.GetAtespace().GetName())
+	ateapipb.Control_GetAtespace_FullMethodName: rule(checksOf(func(r *ateapipb.GetAtespaceRequest) ([]check, field.ErrorList) {
+		return onAtespace(RelationCanGet, r.GetAtespace().GetName(), field.NewPath("atespace", "name"))
 	})),
-	ateapipb.Control_DeleteAtespace_FullMethodName: rule(checksOf(func(r *ateapipb.DeleteAtespaceRequest) []check {
-		return onAtespace(RelationCanDelete, r.GetAtespace().GetName())
+	ateapipb.Control_DeleteAtespace_FullMethodName: rule(checksOf(func(r *ateapipb.DeleteAtespaceRequest) ([]check, field.ErrorList) {
+		return onAtespace(RelationCanDelete, r.GetAtespace().GetName(), field.NewPath("atespace", "name"))
 	})),
 
 	// Access policies.
-	ateapipb.Control_GetGlobalAccessPolicy_FullMethodName: governance(checksOf(func(*ateapipb.GetGlobalAccessPolicyRequest) []check {
+	ateapipb.Control_GetGlobalAccessPolicy_FullMethodName: governance(checksOf(func(*ateapipb.GetGlobalAccessPolicyRequest) ([]check, field.ErrorList) {
 		return onGlobal(RelationCanGetAccessPolicy)
 	})),
-	ateapipb.Control_CreateGlobalAccessPolicy_FullMethodName: governance(checksOf(func(*ateapipb.CreateGlobalAccessPolicyRequest) []check {
+	ateapipb.Control_CreateGlobalAccessPolicy_FullMethodName: governance(checksOf(func(*ateapipb.CreateGlobalAccessPolicyRequest) ([]check, field.ErrorList) {
 		return onGlobal(RelationCanCreateAccessPolicy)
 	})),
-	ateapipb.Control_UpdateGlobalAccessPolicy_FullMethodName: governance(checksOf(func(*ateapipb.UpdateGlobalAccessPolicyRequest) []check {
+	ateapipb.Control_UpdateGlobalAccessPolicy_FullMethodName: governance(checksOf(func(*ateapipb.UpdateGlobalAccessPolicyRequest) ([]check, field.ErrorList) {
 		return onGlobal(RelationCanUpdateAccessPolicy)
 	})),
-	ateapipb.Control_GetAtespaceAccessPolicy_FullMethodName: governance(checksOf(func(r *ateapipb.GetAtespaceAccessPolicyRequest) []check {
-		return onAtespace(RelationCanGetAccessPolicy, r.GetAtespace().GetName())
+	ateapipb.Control_GetAtespaceAccessPolicy_FullMethodName: governance(checksOf(func(r *ateapipb.GetAtespaceAccessPolicyRequest) ([]check, field.ErrorList) {
+		return onAtespace(RelationCanGetAccessPolicy, r.GetAtespace().GetName(), field.NewPath("atespace", "name"))
 	})),
-	ateapipb.Control_CreateAtespaceAccessPolicy_FullMethodName: governance(checksOf(func(r *ateapipb.CreateAtespaceAccessPolicyRequest) []check {
-		return onAtespace(RelationCanCreateAccessPolicy, r.GetAtespace().GetName())
+	ateapipb.Control_CreateAtespaceAccessPolicy_FullMethodName: governance(checksOf(func(r *ateapipb.CreateAtespaceAccessPolicyRequest) ([]check, field.ErrorList) {
+		return onAtespace(RelationCanCreateAccessPolicy, r.GetAtespace().GetName(), field.NewPath("atespace", "name"))
 	})),
-	ateapipb.Control_UpdateAtespaceAccessPolicy_FullMethodName: governance(checksOf(func(r *ateapipb.UpdateAtespaceAccessPolicyRequest) []check {
-		return onAtespace(RelationCanUpdateAccessPolicy, r.GetAtespace().GetName())
+	ateapipb.Control_UpdateAtespaceAccessPolicy_FullMethodName: governance(checksOf(func(r *ateapipb.UpdateAtespaceAccessPolicyRequest) ([]check, field.ErrorList) {
+		return onAtespace(RelationCanUpdateAccessPolicy, r.GetAtespace().GetName(), field.NewPath("atespace", "name"))
 	})),
-	ateapipb.Control_DeleteAtespaceAccessPolicy_FullMethodName: governance(checksOf(func(r *ateapipb.DeleteAtespaceAccessPolicyRequest) []check {
-		return onAtespace(RelationCanDeleteAccessPolicy, r.GetAtespace().GetName())
+	ateapipb.Control_DeleteAtespaceAccessPolicy_FullMethodName: governance(checksOf(func(r *ateapipb.DeleteAtespaceAccessPolicyRequest) ([]check, field.ErrorList) {
+		return onAtespace(RelationCanDeleteAccessPolicy, r.GetAtespace().GetName(), field.NewPath("atespace", "name"))
 	})),
 
 	// Actor templates.
-	ateapipb.Control_CreateActorTemplate_FullMethodName: rule(checksOf(func(r *ateapipb.CreateActorTemplateRequest) []check {
-		return onAtespace(RelationCanCreateActorTemplate, r.GetActorTemplate().GetMetadata().GetAtespace())
+	ateapipb.Control_CreateActorTemplate_FullMethodName: rule(checksOf(func(r *ateapipb.CreateActorTemplateRequest) ([]check, field.ErrorList) {
+		return onAtespace(RelationCanCreateActorTemplate, r.GetActorTemplate().GetMetadata().GetAtespace(), field.NewPath("actor_template", "metadata", "atespace"))
 	})),
-	ateapipb.Control_GetActorTemplate_FullMethodName: rule(checksOf(func(r *ateapipb.GetActorTemplateRequest) []check {
-		return onActorTemplate(RelationCanGet, r.GetActorTemplate())
+	ateapipb.Control_GetActorTemplate_FullMethodName: rule(checksOf(func(r *ateapipb.GetActorTemplateRequest) ([]check, field.ErrorList) {
+		return onActorTemplate(RelationCanGet, r.GetActorTemplate(), field.NewPath("actor_template"))
 	})),
-	ateapipb.Control_ListActorTemplates_FullMethodName: rule(checksOf(func(r *ateapipb.ListActorTemplatesRequest) []check {
-		return onAtespaceOrGlobal(RelationCanListActorTemplates, r.GetAtespace())
+	ateapipb.Control_ListActorTemplates_FullMethodName: rule(checksOf(func(r *ateapipb.ListActorTemplatesRequest) ([]check, field.ErrorList) {
+		return onAtespaceOrGlobal(RelationCanListActorTemplates, r.GetAtespace(), field.NewPath("atespace"))
 	})),
-	ateapipb.Control_DeleteActorTemplate_FullMethodName: rule(checksOf(func(r *ateapipb.DeleteActorTemplateRequest) []check {
-		return onActorTemplate(RelationCanDelete, r.GetActorTemplate())
+	ateapipb.Control_DeleteActorTemplate_FullMethodName: rule(checksOf(func(r *ateapipb.DeleteActorTemplateRequest) ([]check, field.ErrorList) {
+		return onActorTemplate(RelationCanDelete, r.GetActorTemplate(), field.NewPath("actor_template"))
 	})),
 
 	// Actors. Creating or updating an actor also requires can_use on the actor
 	// template it runs, which may live in another atespace.
-	ateapipb.Control_CreateActor_FullMethodName: rule(checksOf(func(r *ateapipb.CreateActorRequest) []check {
-		return slices.Concat(
-			onAtespace(RelationCanCreateActor, r.GetActor().GetMetadata().GetAtespace()),
-			onActorTemplate(RelationCanUse, r.GetActor().GetActorTemplate()),
-		)
+	ateapipb.Control_CreateActor_FullMethodName: rule(checksOf(func(r *ateapipb.CreateActorRequest) ([]check, field.ErrorList) {
+		actorChecks, actorErrs := onAtespace(RelationCanCreateActor, r.GetActor().GetMetadata().GetAtespace(), field.NewPath("actor", "metadata", "atespace"))
+		templateChecks, templateErrs := onActorTemplate(RelationCanUse, r.GetActor().GetActorTemplate(), field.NewPath("actor", "actor_template"))
+		return both(actorChecks, actorErrs, templateChecks, templateErrs)
 	})),
-	ateapipb.Control_GetActor_FullMethodName: rule(checksOf(func(r *ateapipb.GetActorRequest) []check {
-		return onActor(RelationCanGet, r.GetActor())
+	ateapipb.Control_GetActor_FullMethodName: rule(checksOf(func(r *ateapipb.GetActorRequest) ([]check, field.ErrorList) {
+		return onActor(RelationCanGet, r.GetActor(), field.NewPath("actor"))
 	})),
-	ateapipb.Control_ListActors_FullMethodName: rule(checksOf(func(r *ateapipb.ListActorsRequest) []check {
-		return onAtespaceOrGlobal(RelationCanListActors, r.GetAtespace())
+	ateapipb.Control_ListActors_FullMethodName: rule(checksOf(func(r *ateapipb.ListActorsRequest) ([]check, field.ErrorList) {
+		return onAtespaceOrGlobal(RelationCanListActors, r.GetAtespace(), field.NewPath("atespace"))
 	})),
-	ateapipb.Control_UpdateActor_FullMethodName: rule(checksOf(func(r *ateapipb.UpdateActorRequest) []check {
-		return slices.Concat(
-			onActor(RelationCanUpdate, r.GetActor().GetMetadata()),
-			onActorTemplate(RelationCanUse, r.GetActor().GetActorTemplate()),
-		)
+	ateapipb.Control_UpdateActor_FullMethodName: rule(checksOf(func(r *ateapipb.UpdateActorRequest) ([]check, field.ErrorList) {
+		actorChecks, actorErrs := onActor(RelationCanUpdate, r.GetActor().GetMetadata(), field.NewPath("actor", "metadata"))
+		templateChecks, templateErrs := onActorTemplate(RelationCanUse, r.GetActor().GetActorTemplate(), field.NewPath("actor", "actor_template"))
+		return both(actorChecks, actorErrs, templateChecks, templateErrs)
 	})),
-	ateapipb.Control_DeleteActor_FullMethodName: rule(checksOf(func(r *ateapipb.DeleteActorRequest) []check {
-		return onActor(RelationCanDelete, r.GetActor())
+	ateapipb.Control_DeleteActor_FullMethodName: rule(checksOf(func(r *ateapipb.DeleteActorRequest) ([]check, field.ErrorList) {
+		return onActor(RelationCanDelete, r.GetActor(), field.NewPath("actor"))
 	})),
 }

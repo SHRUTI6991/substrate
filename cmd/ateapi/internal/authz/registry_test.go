@@ -16,6 +16,7 @@ package authz
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/agent-substrate/substrate/internal/apierror"
@@ -138,48 +139,6 @@ func TestDefaultRPCPermissions(t *testing.T) {
 			req:        &ateapipb.DeleteActorRequest{Actor: actorRef},
 			want:       []check{{RelationCanDelete, "actor:team-a/runner"}},
 		},
-
-		// Checks on identifiers missing from malformed requests are left out, and
-		// the rest still apply. The handler rejects the missing fields.
-		{
-			name:       "GetActor without a name",
-			fullMethod: ateapipb.Control_GetActor_FullMethodName,
-			req:        &ateapipb.GetActorRequest{Actor: &ateapipb.ObjectRef{Atespace: "team-a"}},
-			want:       nil,
-		},
-		{
-			name:       "CreateActor without an actor",
-			fullMethod: ateapipb.Control_CreateActor_FullMethodName,
-			req:        &ateapipb.CreateActorRequest{},
-			want:       nil,
-		},
-		{
-			name:       "CreateActor without a template still checks the atespace",
-			fullMethod: ateapipb.Control_CreateActor_FullMethodName,
-			req:        &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{Metadata: actorMeta}},
-			want:       []check{{RelationCanCreateActor, "atespace:team-a"}},
-		},
-		{
-			name:       "CreateActor with a template missing its atespace still checks the atespace",
-			fullMethod: ateapipb.Control_CreateActor_FullMethodName,
-			req: &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-				Metadata:      actorMeta,
-				ActorTemplate: &ateapipb.ObjectRef{Name: "tmpl"},
-			}},
-			want: []check{{RelationCanCreateActor, "atespace:team-a"}},
-		},
-		{
-			name:       "UpdateActor without metadata still checks the template",
-			fullMethod: ateapipb.Control_UpdateActor_FullMethodName,
-			req:        &ateapipb.UpdateActorRequest{Actor: &ateapipb.Actor{ActorTemplate: sharedTemplate}},
-			want:       []check{{RelationCanUse, "actor_template:shared/tmpl"}},
-		},
-		{
-			name:       "UpdateActor without a template still checks the actor",
-			fullMethod: ateapipb.Control_UpdateActor_FullMethodName,
-			req:        &ateapipb.UpdateActorRequest{Actor: &ateapipb.Actor{Metadata: actorMeta}},
-			want:       []check{{RelationCanUpdate, "actor:team-a/runner"}},
-		},
 	}
 
 	for _, tc := range tests {
@@ -194,6 +153,162 @@ func TestDefaultRPCPermissions(t *testing.T) {
 			}
 			if !slices.Equal(got, tc.want) {
 				t.Errorf("extract() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// A request missing an identifier a check needs, or naming a resource with an
+// invalid name, is rejected rather than having that check skipped.
+func TestDefaultRPCPermissions_MalformedIdentifierFailsClosed(t *testing.T) {
+	actorMeta := &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "runner"}
+	template := &ateapipb.ObjectRef{Atespace: "shared", Name: "tmpl"}
+
+	tests := []struct {
+		name       string
+		fullMethod string
+		req        any
+		wantField  string
+	}{
+		{
+			name:       "GetAtespace without a name",
+			fullMethod: ateapipb.Control_GetAtespace_FullMethodName,
+			req:        &ateapipb.GetAtespaceRequest{},
+			wantField:  "atespace.name",
+		},
+		{
+			name:       "DeleteAtespace with an invalid name",
+			fullMethod: ateapipb.Control_DeleteAtespace_FullMethodName,
+			req:        &ateapipb.DeleteAtespaceRequest{Atespace: &ateapipb.ObjectRef{Name: "Team A"}},
+			wantField:  "atespace.name",
+		},
+		{
+			name:       "GetAtespaceAccessPolicy without an atespace",
+			fullMethod: ateapipb.Control_GetAtespaceAccessPolicy_FullMethodName,
+			req:        &ateapipb.GetAtespaceAccessPolicyRequest{},
+			wantField:  "atespace.name",
+		},
+		{
+			name:       "UpdateAtespaceAccessPolicy with an invalid atespace",
+			fullMethod: ateapipb.Control_UpdateAtespaceAccessPolicy_FullMethodName,
+			req:        &ateapipb.UpdateAtespaceAccessPolicyRequest{Atespace: &ateapipb.ObjectRef{Name: "Team-A"}},
+			wantField:  "atespace.name",
+		},
+		{
+			name:       "CreateActorTemplate without an atespace",
+			fullMethod: ateapipb.Control_CreateActorTemplate_FullMethodName,
+			req:        &ateapipb.CreateActorTemplateRequest{},
+			wantField:  "actor_template.metadata.atespace",
+		},
+		{
+			name:       "GetActorTemplate with a name containing a tab",
+			fullMethod: ateapipb.Control_GetActorTemplate_FullMethodName,
+			req:        &ateapipb.GetActorTemplateRequest{ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: "a\tb"}},
+			wantField:  "actor_template.name",
+		},
+		{
+			name:       "ListActorTemplates with an invalid atespace",
+			fullMethod: ateapipb.Control_ListActorTemplates_FullMethodName,
+			req:        &ateapipb.ListActorTemplatesRequest{Atespace: "team/a"},
+			wantField:  "atespace",
+		},
+		{
+			name:       "DeleteActorTemplate without an atespace",
+			fullMethod: ateapipb.Control_DeleteActorTemplate_FullMethodName,
+			req:        &ateapipb.DeleteActorTemplateRequest{ActorTemplate: &ateapipb.ObjectRef{Name: "tmpl"}},
+			wantField:  "actor_template.atespace",
+		},
+		{
+			name:       "CreateActor without an actor",
+			fullMethod: ateapipb.Control_CreateActor_FullMethodName,
+			req:        &ateapipb.CreateActorRequest{},
+			wantField:  "actor.metadata.atespace",
+		},
+		{
+			name:       "CreateActor without a template",
+			fullMethod: ateapipb.Control_CreateActor_FullMethodName,
+			req:        &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{Metadata: actorMeta}},
+			wantField:  "actor.actor_template.atespace",
+		},
+		{
+			name:       "CreateActor with a template missing its atespace",
+			fullMethod: ateapipb.Control_CreateActor_FullMethodName,
+			req: &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+				Metadata:      actorMeta,
+				ActorTemplate: &ateapipb.ObjectRef{Name: "tmpl"},
+			}},
+			wantField: "actor.actor_template.atespace",
+		},
+		{
+			name:       "CreateActor with an invalid template atespace",
+			fullMethod: ateapipb.Control_CreateActor_FullMethodName,
+			req: &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+				Metadata:      actorMeta,
+				ActorTemplate: &ateapipb.ObjectRef{Atespace: "shared/x", Name: "tmpl"},
+			}},
+			wantField: "actor.actor_template.atespace",
+		},
+		{
+			name:       "GetActor without a name",
+			fullMethod: ateapipb.Control_GetActor_FullMethodName,
+			req:        &ateapipb.GetActorRequest{Actor: &ateapipb.ObjectRef{Atespace: "team-a"}},
+			wantField:  "actor.name",
+		},
+		{
+			name:       "ListActors with an over-long atespace",
+			fullMethod: ateapipb.Control_ListActors_FullMethodName,
+			req:        &ateapipb.ListActorsRequest{Atespace: strings.Repeat("a", 64)},
+			wantField:  "atespace",
+		},
+		{
+			name:       "UpdateActor without metadata",
+			fullMethod: ateapipb.Control_UpdateActor_FullMethodName,
+			req:        &ateapipb.UpdateActorRequest{Actor: &ateapipb.Actor{ActorTemplate: template}},
+			wantField:  "actor.metadata.atespace",
+		},
+		{
+			name:       "UpdateActor with metadata missing its atespace",
+			fullMethod: ateapipb.Control_UpdateActor_FullMethodName,
+			req: &ateapipb.UpdateActorRequest{Actor: &ateapipb.Actor{
+				Metadata:      &ateapipb.ResourceMetadata{Name: "runner"},
+				ActorTemplate: template,
+			}},
+			wantField: "actor.metadata.atespace",
+		},
+		{
+			name:       "UpdateActor without a template",
+			fullMethod: ateapipb.Control_UpdateActor_FullMethodName,
+			req:        &ateapipb.UpdateActorRequest{Actor: &ateapipb.Actor{Metadata: actorMeta}},
+			wantField:  "actor.actor_template.name",
+		},
+		{
+			name:       "UpdateActor with an invalid template atespace",
+			fullMethod: ateapipb.Control_UpdateActor_FullMethodName,
+			req: &ateapipb.UpdateActorRequest{Actor: &ateapipb.Actor{
+				Metadata:      actorMeta,
+				ActorTemplate: &ateapipb.ObjectRef{Atespace: "Shared", Name: "tmpl"},
+			}},
+			wantField: "actor.actor_template.atespace",
+		},
+		{
+			name:       "DeleteActor with an invalid atespace",
+			fullMethod: ateapipb.Control_DeleteActor_FullMethodName,
+			req:        &ateapipb.DeleteActorRequest{Actor: &ateapipb.ObjectRef{Atespace: "team:a", Name: "runner"}},
+			wantField:  "actor.atespace",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := defaultRPCPermissions[tc.fullMethod].extract(tc.req)
+			if apierror.Code(err) != codes.InvalidArgument {
+				t.Fatalf("extract() = %v, %v; want code InvalidArgument", got, err)
+			}
+			if got != nil {
+				t.Errorf("extract() checks = %v, want none alongside the error", got)
+			}
+			if msg := err.Error(); !strings.Contains(msg, tc.wantField) {
+				t.Errorf("extract() error %q does not name field %q", msg, tc.wantField)
 			}
 		})
 	}

@@ -35,16 +35,14 @@ func UnaryServerInterceptor(authorizer *Authorizer, enforce bool) grpc.UnaryServ
 			return handler(ctx, req)
 		}
 
+		// Authenticate first, so an unauthenticated caller gets Unauthenticated
+		// rather than a validation error for its request.
+		if p, ok := principal.FromContext(ctx); !ok || p.ID == "" {
+			return nil, apierror.Unauthenticated("unauthenticated: missing principal in context")
+		}
 		checks, err := rule.extract(req)
 		if err != nil {
 			return nil, err
-		}
-		if len(checks) == 0 {
-			p, hasPrincipal := principal.FromContext(ctx)
-			if !hasPrincipal || p.ID == "" {
-				return nil, apierror.Unauthenticated("unauthenticated: missing principal in context")
-			}
-			return handler(ctx, req)
 		}
 		for _, c := range checks {
 			if err := authorizer.Check(ctx, c.relation, c.object); err != nil {
