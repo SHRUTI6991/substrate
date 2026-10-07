@@ -50,7 +50,7 @@ const (
 	RelationCanCreateActorTemplate = "can_create_actor_template"
 	RelationCanListActorTemplates  = "can_list_actor_templates"
 	RelationCanGet                 = "can_get"
-	RelationCanUse                 = "can_use"
+	RelationCanUseTemplate         = "can_use_template"
 	RelationCanUpdate              = "can_update"
 	RelationCanDelete              = "can_delete"
 	RelationCanCreateAccessPolicy  = "can_create_access_policy"

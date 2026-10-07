@@ -189,11 +189,11 @@ var defaultRPCPermissions = map[string]rpcRule{
 		return onActorTemplate(RelationCanDelete, r.GetActorTemplate(), field.NewPath("actor_template"))
 	})),
 
-	// Actors. Creating or updating an actor also requires can_use on the actor
-	// template it runs, which may live in another atespace.
+	// Actors. Creating or updating an actor also requires can_use_template on
+	// the actor template it runs, which may live in another atespace.
 	ateapipb.Control_CreateActor_FullMethodName: rule(checksOf(func(r *ateapipb.CreateActorRequest) ([]check, field.ErrorList) {
 		actorChecks, actorErrs := onAtespace(RelationCanCreateActor, r.GetActor().GetMetadata().GetAtespace(), field.NewPath("actor", "metadata", "atespace"))
-		templateChecks, templateErrs := onActorTemplate(RelationCanUse, r.GetActor().GetActorTemplate(), field.NewPath("actor", "actor_template"))
+		templateChecks, templateErrs := onActorTemplate(RelationCanUseTemplate, r.GetActor().GetActorTemplate(), field.NewPath("actor", "actor_template"))
 		return both(actorChecks, actorErrs, templateChecks, templateErrs)
 	})),
 	ateapipb.Control_GetActor_FullMethodName: rule(checksOf(func(r *ateapipb.GetActorRequest) ([]check, field.ErrorList) {
@@ -204,7 +204,7 @@ var defaultRPCPermissions = map[string]rpcRule{
 	})),
 	ateapipb.Control_UpdateActor_FullMethodName: rule(checksOf(func(r *ateapipb.UpdateActorRequest) ([]check, field.ErrorList) {
 		actorChecks, actorErrs := onActor(RelationCanUpdate, r.GetActor().GetMetadata(), field.NewPath("actor", "metadata"))
-		templateChecks, templateErrs := onActorTemplate(RelationCanUse, r.GetActor().GetActorTemplate(), field.NewPath("actor", "actor_template"))
+		templateChecks, templateErrs := onActorTemplate(RelationCanUseTemplate, r.GetActor().GetActorTemplate(), field.NewPath("actor", "actor_template"))
 		return both(actorChecks, actorErrs, templateChecks, templateErrs)
 	})),
 	ateapipb.Control_DeleteActor_FullMethodName: rule(checksOf(func(r *ateapipb.DeleteActorRequest) ([]check, field.ErrorList) {

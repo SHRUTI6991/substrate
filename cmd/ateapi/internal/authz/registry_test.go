@@ -103,7 +103,7 @@ func TestDefaultRPCPermissions(t *testing.T) {
 			req:        &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{Metadata: actorMeta, ActorTemplate: sharedTemplate}},
 			want: []check{
 				{RelationCanCreateActor, "atespace:team-a"},
-				{RelationCanUse, "actor_template:shared/tmpl"},
+				{RelationCanUseTemplate, "actor_template:shared/tmpl"},
 			},
 		},
 		{
@@ -130,7 +130,7 @@ func TestDefaultRPCPermissions(t *testing.T) {
 			req:        &ateapipb.UpdateActorRequest{Actor: &ateapipb.Actor{Metadata: actorMeta, ActorTemplate: sharedTemplate}},
 			want: []check{
 				{RelationCanUpdate, "actor:team-a/runner"},
-				{RelationCanUse, "actor_template:shared/tmpl"},
+				{RelationCanUseTemplate, "actor_template:shared/tmpl"},
 			},
 		},
 		{

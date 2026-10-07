@@ -357,7 +357,7 @@ func TestUnaryServerInterceptor_ActorAndTemplateChecks(t *testing.T) {
 		call     rpcCall
 		wantCode codes.Code
 	}{
-		// CreateActor needs can_create_actor on team-a and can_use on the template.
+		// CreateActor needs can_create_actor on team-a and can_use_template on the template.
 		{"editor creates actor from local template", "editor", createActor(local), codes.OK},
 		{"viewer cannot create actor", "viewer", createActor(local), codes.PermissionDenied},
 		{"global viewer cannot create actor", "global-viewer", createActor(local), codes.PermissionDenied},
@@ -366,7 +366,7 @@ func TestUnaryServerInterceptor_ActorAndTemplateChecks(t *testing.T) {
 		{"shared viewer cannot create actor without editor on team-a", "shared-viewer", createActor(shared), codes.PermissionDenied},
 		{"global owner creates actor from any template", "global-owner", createActor(shared), codes.OK},
 
-		// UpdateActor needs can_update on the actor and can_use on the template.
+		// UpdateActor needs can_update on the actor and can_use_template on the template.
 		{"editor updates actor on local template", "editor", updateActor(local), codes.OK},
 		{"viewer cannot update actor", "viewer", updateActor(local), codes.PermissionDenied},
 		{"editor cannot point actor at template they cannot use", "editor", updateActor(shared), codes.PermissionDenied},

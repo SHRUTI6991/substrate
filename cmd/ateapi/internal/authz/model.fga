@@ -82,7 +82,7 @@ type actor_template
     # Run actors from this template (CreateActor, UpdateActor). Same grant as
     # can_get for now; a separate relation so running a template can later
     # require more than reading it.
-    define can_use: viewer from parent_atespace
+    define can_use_template: viewer from parent_atespace
     define can_update: editor from parent_atespace
     define can_delete: editor from parent_atespace
 
