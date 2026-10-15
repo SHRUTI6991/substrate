@@ -20,6 +20,19 @@ scenario ladder, read [observability.md](observability.md).
 > export BUCKET_NAME="ate-snapshots"
 > ```
 
+> [!IMPORTANT]
+> The ate-api-server checks every call against
+> [authorization](../docs/authorization.md), and Locust calls it as the
+> `benchmarking/default` ServiceAccount. Install Substrate with that identity
+> as a bootstrap owner, alongside the default `ate-client` owner, or every
+> benchmark call is denied:
+> ```bash
+> ATE_API_AUTHZ_BOOTSTRAP_OWNERS=system:serviceaccount:ate-system:ate-client,spiffe://cluster.local/ns/benchmarking/sa/default \
+>   ./hack/install-ate.sh --deploy-ate-system
+> ```
+> The nightly automation sets this itself; see
+> [automation/README.md](automation/README.md).
+
 Note that deploying the benchmarks does not run them. You must visit Locust's
 web UI to start a test.
 

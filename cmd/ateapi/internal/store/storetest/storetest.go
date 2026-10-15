@@ -103,6 +103,7 @@ func DefaultSystemPrincipals() authz.SystemPrincipals {
 		ControllerSPIFFEID:    installdefaults.ControllerSPIFFEID(installdefaults.SystemNamespace),
 		EgressGatewaySPIFFEID: installdefaults.EgressSPIFFEID(installdefaults.SystemNamespace),
 		IngressRouterSPIFFEID: installdefaults.RouterSPIFFEID(installdefaults.SystemNamespace),
+		AteletSPIFFEID:        installdefaults.AteletSPIFFEID(installdefaults.SystemNamespace),
 	}
 }
 

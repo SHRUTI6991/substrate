@@ -174,6 +174,17 @@ var Registry = []Setting{
 		Usage: "Service account token issuer ate-api-server trusts, overriding derivation and discovery",
 	},
 	{
+		Key: "ateapi.authz.enabled", Env: "ATE_API_EXPERIMENTAL_ENABLE_AUTHZ",
+		Flag: "ateapi-experimental-enable-authz", Kind: KindBool, Default: "true",
+		Usage: "Enforce ate-api-server's runtime authorization",
+	},
+	{
+		Key: "ateapi.authz.bootstrapOwners", Env: "ATE_API_AUTHZ_BOOTSTRAP_OWNERS",
+		Flag: "ateapi-authz-bootstrap-owners", Kind: KindString,
+		Usage: "Comma-separated principals that always hold owner on global:root when authorization is enforced. " +
+			"Unset means kubectl-ate's ServiceAccount, system:serviceaccount:<namespace>:ate-client",
+	},
+	{
 		// The egress gateway's credential provider, as a JSON object. Upstream
 		// takes it as one value on one flag; it is carried the same way here
 		// so the two channels accept the same text.

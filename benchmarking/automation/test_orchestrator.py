@@ -60,6 +60,30 @@ class SubstrateArgsTest(unittest.TestCase):
         self.assertEqual(orchestrator.substrate_args({"isolate": None}), ["--fake-data-plane"])
 
 
+class DeploySubstrateTest(unittest.TestCase):
+    # The runner Job authenticates with its pod certificate, so ate-api-server
+    # denies it unless the install makes it an owner.
+    @mock.patch("orchestrator.run")
+    def test_runner_and_client_are_bootstrap_owners(self, run):
+        orchestrator.deploy_substrate(["--credential-provider={}"])
+        cmd = run.call_args.args[0]
+        self.assertEqual(cmd, ["hack/install-ate.sh", "--deploy-ate-system", "--credential-provider={}"])
+        owners = run.call_args.kwargs["env"]["ATE_API_AUTHZ_BOOTSTRAP_OWNERS"].split(",")
+        self.assertEqual(
+            owners,
+            [
+                "system:serviceaccount:ate-system:ate-client",
+                "spiffe://cluster.local/ns/benchmarking/sa/benchmark-runner",
+            ],
+        )
+
+    @mock.patch("orchestrator.run")
+    def test_keeps_the_rest_of_the_environment(self, run):
+        with mock.patch.dict(os.environ, {"KO_DOCKER_REPO": "example"}):
+            orchestrator.deploy_substrate()
+        self.assertEqual(run.call_args.kwargs["env"]["KO_DOCKER_REPO"], "example")
+
+
 class DeployWorkloadsTest(unittest.TestCase):
     @mock.patch("orchestrator.run")
     def test_defaults_omit_optional_flags(self, run):

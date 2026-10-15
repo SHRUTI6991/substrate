@@ -210,3 +210,24 @@ func TestServerTLSConfigErrors(t *testing.T) {
 		})
 	}
 }
+
+func TestFallbackPrincipal(t *testing.T) {
+	tests := []struct {
+		name      string
+		namespace string
+		sa        string
+		want      string
+	}{
+		{"defaults", "", "", "system:serviceaccount:ate-system:ate-client"},
+		{"overridden", "custom-ns", "custom-client", "system:serviceaccount:custom-ns:custom-client"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(NamespaceEnv, tc.namespace)
+			t.Setenv(ClientServiceAccountEnv, tc.sa)
+			if got := FallbackPrincipal(); got != tc.want {
+				t.Errorf("FallbackPrincipal() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}

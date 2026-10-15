@@ -209,17 +209,29 @@ func buildConfig(root string, env map[string]string, r *Resolved) (*Config, erro
 	if actorJWTIssuer == "" {
 		actorJWTIssuer = installdefaults.ActorJWTIssuer(r.String("namespace"))
 	}
+	// kubectl-ate, ate-setup's demo steps and the e2e clients fall back to
+	// tokens minted from the client ServiceAccount, so making it the default
+	// bootstrap owner keeps them working with authorization on. The deploy
+	// warns whenever it is a bootstrap owner.
+	bootstrapOwners := r.String("ateapi.authz.bootstrapOwners")
+	if bootstrapOwners == "" {
+		bootstrapOwners = installdefaults.ClientPrincipal(r.String("namespace"))
+	}
 
 	cfg := &Config{
-		Root:               root,
-		Kind:               r.Bool("kindCluster.enabled"),
-		Namespace:          r.String("namespace"),
-		Kubeconfig:         kubeconfig,
-		Context:            r.String("context"),
-		ProjectID:          r.String("gcp.projectID"),
-		ClusterName:        r.String("gcp.clusterName"),
-		ClusterLocation:    r.String("gcp.clusterLocation"),
-		ExpectedJWTIssuer:  r.String("ateapi.expectedJWTIssuer"),
+		Root:              root,
+		Kind:              r.Bool("kindCluster.enabled"),
+		Namespace:         r.String("namespace"),
+		Kubeconfig:        kubeconfig,
+		Context:           r.String("context"),
+		ProjectID:         r.String("gcp.projectID"),
+		ClusterName:       r.String("gcp.clusterName"),
+		ClusterLocation:   r.String("gcp.clusterLocation"),
+		ExpectedJWTIssuer: r.String("ateapi.expectedJWTIssuer"),
+
+		APIExperimentalEnableAuthz: r.Bool("ateapi.authz.enabled"),
+		APIAuthzBootstrapOwners:    bootstrapOwners,
+
 		BucketName:         r.String("storage.bucketName"),
 		KODockerRepo:       r.String("ko.dockerRepo"),
 		KODefaultPlatforms: r.String("ko.defaultPlatforms"),
@@ -448,6 +460,13 @@ func validateResolved(cfg *Config, r *Resolved) error {
 			provider, _ := r.Value("atenet.egress.credentialProvider")
 			return fmt.Errorf("%w (from %s)", err, provider.From.Describe(provider.Setting))
 		}
+	}
+	// ate-api-server exits on this combination, so catch it before deploying.
+	if cfg.APIExperimentalEnableAuthz && strings.Trim(cfg.APIAuthzBootstrapOwners, " ,") == "" {
+		enabled, _ := r.Value("ateapi.authz.enabled")
+		owners, _ := r.Value("ateapi.authz.bootstrapOwners")
+		return &ConflictError{A: enabled, B: owners,
+			Why: "enforced authorization needs at least one bootstrap owner"}
 	}
 	return nil
 }

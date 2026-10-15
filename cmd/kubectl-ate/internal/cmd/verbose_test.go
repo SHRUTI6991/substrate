@@ -287,3 +287,23 @@ func TestTopWorkersRunner_VerboseSurfacesMetricsIssues(t *testing.T) {
 		}
 	})
 }
+
+func TestWarnSharedIdentity(t *testing.T) {
+	t.Run("warns without a token file", func(t *testing.T) {
+		var buf bytes.Buffer
+		warnSharedIdentity(&buf, "")
+		got := buf.String()
+		for _, want := range []string{"Warning:", "ate-client", "shared identity", "--token-file"} {
+			if !strings.Contains(got, want) {
+				t.Errorf("warning %q does not mention %q", got, want)
+			}
+		}
+	})
+	t.Run("silent with a token file", func(t *testing.T) {
+		var buf bytes.Buffer
+		warnSharedIdentity(&buf, "/path/to/token")
+		if got := buf.String(); got != "" {
+			t.Errorf("warning = %q, want none", got)
+		}
+	})
+}

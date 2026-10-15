@@ -231,6 +231,18 @@ func main() {
 		// AccessPolicy, so the enforced API would be unusable.
 		serverboot.Fatal(ctx, "Invalid flags", fmt.Errorf("--authz-bootstrap-owners must list at least one principal when --experimental-enable-authz is set"))
 	}
+	// atelet shares ateapi's namespace in every supported deployment topology,
+	// so we read it from Kubernetes' downward API rather than expose a flag.
+	ateletNamespace := installdefaults.NamespaceFromPodEnv()
+	// An empty ServiceAccount would not fail here: path.Join drops the empty
+	// segment, yielding an identity that parses but matches nothing, so every
+	// atelet dial would be rejected with no hint at the cause.
+	if *ateletServiceAccount == "" {
+		serverboot.Fatal(ctx, "Invalid flags", fmt.Errorf("--atelet-service-account must not be empty"))
+	}
+	ateletSPIFFEID := installdefaults.SPIFFEID(ateletNamespace, *ateletServiceAccount)
+	slog.InfoContext(ctx, "Resolved atelet namespace", slog.String("atelet-namespace", ateletNamespace), slog.String("atelet-spiffe-id", ateletSPIFFEID))
+
 	fgaServer, err := authz.NewOpenFGAServer(pool)
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to create OpenFGA server", err)
@@ -240,6 +252,7 @@ func main() {
 		ControllerSPIFFEID:    *controllerSPIFFEID,
 		EgressGatewaySPIFFEID: *egressGatewaySPIFFEID,
 		IngressRouterSPIFFEID: *ingressRouterSPIFFEID,
+		AteletSPIFFEID:        ateletSPIFFEID,
 	})
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to initialize OpenFGA authz", err)
@@ -265,18 +278,6 @@ func main() {
 	workerPoolLister := ateFactory.Api().V1alpha1().WorkerPools().Lister()
 	sandboxConfigLister := ateFactory.Api().V1alpha1().SandboxConfigs().Lister()
 	csiDriverConfigLister := ateFactory.Api().V1alpha1().CSIDriverConfigs().Lister()
-
-	// atelet shares ateapi's namespace in every supported deployment topology,
-	// so we read it from Kubernetes' downward API rather than expose a flag.
-	ateletNamespace := installdefaults.NamespaceFromPodEnv()
-	// An empty ServiceAccount would not fail here: path.Join drops the empty
-	// segment, yielding an identity that parses but matches nothing, so every
-	// atelet dial would be rejected with no hint at the cause.
-	if *ateletServiceAccount == "" {
-		serverboot.Fatal(ctx, "Invalid flags", fmt.Errorf("--atelet-service-account must not be empty"))
-	}
-	ateletSPIFFEID := installdefaults.SPIFFEID(ateletNamespace, *ateletServiceAccount)
-	slog.InfoContext(ctx, "Resolved atelet namespace", slog.String("atelet-namespace", ateletNamespace), slog.String("atelet-spiffe-id", ateletSPIFFEID))
 
 	ateletPodInformerFactory, ateletPodInformer := controlapi.AteletInformer(clientset, ateletNamespace)
 	scInformerFactory := informers.NewSharedInformerFactory(clientset, 0)
@@ -465,9 +466,6 @@ func loadFlagsFromEnv() error {
 			}
 			*postgresPoolMaxConns = int32(value)
 		}
-	}
-	if v := os.Getenv("ATE_API_EXPERIMENTAL_ENABLE_AUTHZ"); v != "" && !pflag.CommandLine.Changed("experimental-enable-authz") {
-		*experimentalEnableAuthz = (v == "true" || v == "1")
 	}
 	return nil
 }
