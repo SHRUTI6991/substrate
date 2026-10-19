@@ -97,8 +97,6 @@ started to tackle yet, but which we know will need to be solved eventually.
   * Peer to peer state sharing: Relying on data locality presents a risk of
     data loss.  We probably need some form of state-sharing to protect against
     that, which needs to be balanced with saving state to a "permanent" store.
-  * Control plane authn/z: We will need to ensure that the control plane is secure, and that only
-    authorized users and agents can interact with it.
   * Identity and policy: We know that agents' needs for identity are very
     different than traditional workload identity and end-user credentials.
   * There are certainly more that we haven't thought of yet!
@@ -316,6 +314,18 @@ manage actor lifecycles.
 
   * **Workflow Engine**: Orchestrates the multi-step Resume/Suspend sequences
     (lock acquisition, storage download, sandbox restore).
+
+  * **Authentication & Authorization**: Authenticates every RPC, by mTLS pod
+    certificate for Substrate's components and by JWT for clients (see
+    [authentication.md](authentication.md)); only the `/healthz` and
+    `/readyz` probes, served on a separate HTTP port, skip it. `Control` RPCs
+    are authorized at the gRPC interceptor against an embedded OpenFGA model,
+    enforced by default in installs from `ate-setup`: callers get roles per
+    global scope and atespace through AccessPolicy, Substrate's components
+    hold fixed system roles, and an RPC without a rule is denied.
+    `WorkerService` RPCs are served only to `atelet`, and each handler checks
+    that the actor or worker is on the caller's node, whether or not
+    enforcement is on. See [authorization.md](authorization.md).
 
 ### Node Supervisor (`atelet` + `ateworker`)
 
@@ -543,12 +553,22 @@ Agent Substrate is built on a **Defense-in-Depth** model:
     security context even as they migrate across physical nodes or code
     versions.
 
-  * **Request Authorization**: The system currently performs **Identity-Aware
-    Routing** by extracting and validating the `ate-target-actor` header at
-    the gateway. This ensures requests are only
-    routed to recognized, registered actors.
-    Pluggable, granular authorization policies are planned for future
-    milestones.
+  * **API Authorization**: With enforcement on, the default in installs from
+    `ate-setup`, every `ate-api-server` RPC is authorized. Users
+    and automation get owner, editor, or viewer roles on the global scope or
+    on an atespace through AccessPolicy (`kubectl ate access-policy`), and
+    Substrate's components hold fixed system roles bound to their pod
+    certificates. The atespace is the finest boundary today. See
+    [authorization.md](authorization.md) for the roles, the check behind each
+    RPC, and known gaps.
+
+  * **Ingress Authentication and Routing**: The gateway routes each request to
+    the actor its `ate-target-actor` header names, and only to recognized,
+    registered actors. With `--ingress-auth-mode=static-mtls`, it accepts only
+    clients whose SPIFFE ID is on a static allowlist; any listed client may
+    reach any actor, as per-actor ingress authorization is not yet supported.
+    The default mode, `deprecated-insecure`, also serves plaintext listeners
+    that accept any client.
 
   * **Network Policy**: Agent Substrate leverages standard Kubernetes
     NetworkPolicy for connectivity control. Policies can be applied at the

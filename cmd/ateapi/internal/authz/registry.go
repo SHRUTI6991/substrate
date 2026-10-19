@@ -338,7 +338,5 @@ var defaultRPCPermissions = map[string]rpcRule{
 	ateapipb.WorkerService_RequestActorSuspend_FullMethodName:        inHandler("ateletauth: caller is atelet on the node of the Worker hosting the Actor"),
 	ateapipb.WorkerService_MintWorkerActorCertificate_FullMethodName: inHandler("ateletauth: caller is atelet on the node of the Worker the Actor is assigned to"),
 	ateapipb.WorkerService_MintWorkerActorJwt_FullMethodName:         inHandler("ateletauth: caller is atelet on the node hosting the Actor"),
-	// TODO(#2570): not served yet; the handler must authenticate atelet on the
-	// node of the Worker hosting the Actor when it lands.
-	ateapipb.WorkerService_ReportActorSnapshotState_FullMethodName: inHandler("ateletauth: caller is atelet on the node of the Worker hosting the Actor"),
+	ateapipb.WorkerService_ReportActorSnapshotState_FullMethodName:   inHandler("ateletauth: caller is atelet on the node the Actor is placed on or holds a local snapshot of it"),
 }
