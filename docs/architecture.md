@@ -315,17 +315,9 @@ manage actor lifecycles.
   * **Workflow Engine**: Orchestrates the multi-step Resume/Suspend sequences
     (lock acquisition, storage download, sandbox restore).
 
-  * **Authentication & Authorization**: Authenticates every RPC, by mTLS pod
-    certificate for Substrate's components and by JWT for clients (see
-    [authentication.md](authentication.md)); only the `/healthz` and
-    `/readyz` probes, served on a separate HTTP port, skip it. `Control` RPCs
-    are authorized at the gRPC interceptor against an embedded OpenFGA model,
-    enforced by default in installs from `ate-setup`: callers get roles per
-    global scope and atespace through AccessPolicy, Substrate's components
-    hold fixed system roles, and an RPC without a rule is denied.
-    `WorkerService` RPCs are served only to `atelet`, and each handler checks
-    that the actor or worker is on the caller's node, whether or not
-    enforcement is on. See [authorization.md](authorization.md).
+  * **Authentication & Authorization**: [Authenticates](authentication.md)
+    every RPC and [authorizes](authorization.md) it per atespace with an
+    embedded OpenFGA model.
 
 ### Node Supervisor (`atelet` + `ateworker`)
 
