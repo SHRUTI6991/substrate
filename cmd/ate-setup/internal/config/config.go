@@ -122,9 +122,6 @@ type Config struct {
 	// follows neither form.
 	ExpectedJWTIssuer string
 
-	// APIExperimentalEnableAuthz turns on ate-api-server's runtime
-	// authorization (ATE_API_EXPERIMENTAL_ENABLE_AUTHZ).
-	APIExperimentalEnableAuthz bool
 	// APIAuthzBootstrapOwners is the comma-separated principal list granted
 	// owner on global:root (ATE_API_AUTHZ_BOOTSTRAP_OWNERS).
 	APIAuthzBootstrapOwners string

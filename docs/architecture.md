@@ -547,8 +547,7 @@ Agent Substrate is built on a **Defense-in-Depth** model:
     security context even as they migrate across physical nodes or code
     versions.
 
-  * **API Authorization**: With enforcement on, the default in installs from
-    `ate-setup`, every `ate-api-server` RPC is authorized. Users
+  * **API Authorization**: Every `ate-api-server` RPC is authorized. Users
     and automation get owner, editor, or viewer roles on the global scope or
     on an atespace through AccessPolicy (`kubectl ate access-policy`), and
     Substrate's components hold fixed system roles bound to their pod

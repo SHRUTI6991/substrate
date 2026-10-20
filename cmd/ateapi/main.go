@@ -85,11 +85,10 @@ var (
 	postgresOwnerRole                 = pflag.String("postgres-owner-role", "", "Required PostgreSQL role assumed by owner connections.")
 	postgresSchema                    = pflag.String("postgres-schema", "substrate", "PostgreSQL schema for Substrate tables. This overrides a search_path connection parameter.")
 	postgresPoolMaxConns              = pflag.Int32("postgres-pool-max-conns", 0, "Maximum connections in the shared Substrate and OpenFGA read/write PostgreSQL pool. Does not affect the owner, watch, or readiness probe pools. The DSN or pgx default is used when unset.")
-	experimentalEnableAuthz           = pflag.Bool("experimental-enable-authz", false, "Enforce OpenFGA authorization checks on all registered RPCs (experimental). AccessPolicy RPCs are always checked.")
 	// TODO: Move the authz settings into the hot-reloadable config proto
 	// (agent-substrate/substrate#2021) once it lands, so bootstrap owner
 	// changes take effect without a restart.
-	authzBootstrapOwners = pflag.StringSlice("authz-bootstrap-owners", nil, "Principal IDs that are always global owners while listed, independent of the stored global AccessPolicy. Removing an ID revokes its access on restart. At least one is required when --experimental-enable-authz is set.")
+	authzBootstrapOwners = pflag.StringSlice("authz-bootstrap-owners", nil, "Principal IDs that are always global owners while listed, independent of the stored global AccessPolicy. Removing an ID revokes its access on restart. Required: at least one.")
 	// These SPIFFE IDs hold the matching system component role when they call
 	// over mTLS.
 	controllerSPIFFEID       = pflag.String("controller-spiffe-id", installdefaults.ControllerSPIFFEID(installdefaults.NamespaceFromPodEnv()), "mTLS SPIFFE ID of ate-controller. Holds the controller authz role, which manages workers.")
@@ -232,13 +231,10 @@ func main() {
 	// (atepg's outbox maintenance loop); stop it on shutdown before closing pool.
 	defer persistence.Close()
 
-	// The authz stack is always wired so policy tuples stay in sync with the
-	// store; --experimental-enable-authz only controls enforcement in the
-	// interceptor.
-	if *experimentalEnableAuthz && len(*authzBootstrapOwners) == 0 {
+	if len(*authzBootstrapOwners) == 0 {
 		// Without a bootstrap owner, nobody could create the global
-		// AccessPolicy, so the enforced API would be unusable.
-		serverboot.Fatal(ctx, "Invalid flags", fmt.Errorf("--authz-bootstrap-owners must list at least one principal when --experimental-enable-authz is set"))
+		// AccessPolicy, so the API would be unusable.
+		serverboot.Fatal(ctx, "Invalid flags", fmt.Errorf("--authz-bootstrap-owners must list at least one principal"))
 	}
 	// atelet shares ateapi's namespace in every supported deployment topology,
 	// so we read it from Kubernetes' downward API rather than expose a flag.
@@ -379,7 +375,7 @@ func main() {
 		apiauthn.UnaryServerInterceptor(authCfg),
 		ateinterceptors.MaxDeadlineUnaryInterceptor(maxRPCDeadline),
 		ateinterceptors.ServerUnaryInterceptor,
-		authz.UnaryServerInterceptor(authorizer, *experimentalEnableAuthz),
+		authz.UnaryServerInterceptor(authorizer),
 		ateinterceptors.RejectUnknownFieldsUnaryInterceptor,
 		preview.UnaryServerInterceptor,
 	}
@@ -504,7 +500,6 @@ func logFlagValues(ctx context.Context) {
 		slog.String("postgres-owner-role", *postgresOwnerRole),
 		slog.String("postgres-schema", *postgresSchema),
 		slog.Int("postgres-pool-max-conns", int(*postgresPoolMaxConns)),
-		slog.Bool("experimental-enable-authz", *experimentalEnableAuthz),
 		slog.Any("authz-bootstrap-owners", *authzBootstrapOwners),
 		slog.String("actor-id-jwt-pool", *actorIDJWTPoolFile),
 		slog.String("actor-jwt-issuer", *actorJWTIssuer),

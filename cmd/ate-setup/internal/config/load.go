@@ -212,8 +212,8 @@ func buildConfig(root string, env map[string]string, r *Resolved) (*Config, erro
 	}
 	// kubectl-ate, ate-setup's demo steps and the e2e clients fall back to
 	// tokens minted from the client ServiceAccount, so making it the default
-	// bootstrap owner keeps them working with authorization on. The deploy
-	// warns whenever it is a bootstrap owner.
+	// bootstrap owner keeps them working. The deploy warns whenever it is a
+	// bootstrap owner.
 	bootstrapOwners := r.String("ateapi.authz.bootstrapOwners")
 	if bootstrapOwners == "" {
 		bootstrapOwners = installdefaults.ClientPrincipal(r.String("namespace"))
@@ -230,8 +230,7 @@ func buildConfig(root string, env map[string]string, r *Resolved) (*Config, erro
 		ClusterLocation:   r.String("gcp.clusterLocation"),
 		ExpectedJWTIssuer: r.String("ateapi.expectedJWTIssuer"),
 
-		APIExperimentalEnableAuthz: r.Bool("ateapi.authz.enabled"),
-		APIAuthzBootstrapOwners:    bootstrapOwners,
+		APIAuthzBootstrapOwners: bootstrapOwners,
 
 		BucketName:         r.String("storage.bucketName"),
 		SnapshotLocation:   r.String("storage.snapshotLocation"),
@@ -478,12 +477,11 @@ func validateResolved(cfg *Config, r *Resolved) error {
 			return fmt.Errorf("%w (from %s)", err, provider.From.Describe(provider.Setting))
 		}
 	}
-	// ate-api-server exits on this combination, so catch it before deploying.
-	if cfg.APIExperimentalEnableAuthz && strings.Trim(cfg.APIAuthzBootstrapOwners, " ,") == "" {
-		enabled, _ := r.Value("ateapi.authz.enabled")
+	// ate-api-server exits without a bootstrap owner, so catch it before
+	// deploying.
+	if strings.Trim(cfg.APIAuthzBootstrapOwners, " ,") == "" {
 		owners, _ := r.Value("ateapi.authz.bootstrapOwners")
-		return &ConflictError{A: enabled, B: owners,
-			Why: "enforced authorization needs at least one bootstrap owner"}
+		return &InvalidError{Value: owners, Want: "a list of at least one bootstrap owner"}
 	}
 	return nil
 }

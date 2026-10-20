@@ -48,7 +48,6 @@ func loadEnv(t *testing.T) {
 		"ANTHROPIC_API_KEY",
 		"ATE_ADDITIONAL_EGRESS_EXTPROC_SERVICE",
 		"ATE_API_AUTHZ_BOOTSTRAP_OWNERS",
-		"ATE_API_EXPERIMENTAL_ENABLE_AUTHZ",
 		"ATE_API_LOG_LEVEL",
 		"ATE_API_POSTGRES_CLOUDSQL_GSA",
 		"ATE_API_POSTGRES_CLOUDSQL_IAM_AUTH",
@@ -680,36 +679,27 @@ func TestLoadAPIAuthz(t *testing.T) {
 		owners      = "alice@example.com,bob@example.com"
 	)
 	for _, tc := range []struct {
-		name        string
-		env         map[string]string
-		wantEnabled bool
-		wantOwners  string
-		wantErr     bool
+		name       string
+		env        map[string]string
+		wantOwners string
+		wantErr    bool
 	}{
 		{
-			name:        "on by default, owned by the client ServiceAccount",
-			wantEnabled: true,
-			wantOwners:  clientOwner,
-		},
-		{
-			name:        "default owner follows the namespace",
-			env:         map[string]string{"ATE_NAMESPACE": "custom"},
-			wantEnabled: true,
-			wantOwners:  "system:serviceaccount:custom:ate-client",
-		},
-		{
-			name:        "explicit owners replace the default",
-			env:         map[string]string{"ATE_API_AUTHZ_BOOTSTRAP_OWNERS": owners},
-			wantEnabled: true,
-			wantOwners:  owners,
-		},
-		{
-			name:       "turned off",
-			env:        map[string]string{"ATE_API_EXPERIMENTAL_ENABLE_AUTHZ": "false"},
+			name:       "owned by the client ServiceAccount by default",
 			wantOwners: clientOwner,
 		},
 		{
-			name:    "enabled with only separators",
+			name:       "default owner follows the namespace",
+			env:        map[string]string{"ATE_NAMESPACE": "custom"},
+			wantOwners: "system:serviceaccount:custom:ate-client",
+		},
+		{
+			name:       "explicit owners replace the default",
+			env:        map[string]string{"ATE_API_AUTHZ_BOOTSTRAP_OWNERS": owners},
+			wantOwners: owners,
+		},
+		{
+			name:    "only separators",
 			env:     map[string]string{"ATE_API_AUTHZ_BOOTSTRAP_OWNERS": " , "},
 			wantErr: true,
 		},
@@ -729,8 +719,8 @@ func TestLoadAPIAuthz(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Load() error = %v", err)
 			}
-			if cfg.APIExperimentalEnableAuthz != tc.wantEnabled || cfg.APIAuthzBootstrapOwners != tc.wantOwners {
-				t.Errorf("authz = %v, %q, want %v, %q", cfg.APIExperimentalEnableAuthz, cfg.APIAuthzBootstrapOwners, tc.wantEnabled, tc.wantOwners)
+			if cfg.APIAuthzBootstrapOwners != tc.wantOwners {
+				t.Errorf("APIAuthzBootstrapOwners = %q, want %q", cfg.APIAuthzBootstrapOwners, tc.wantOwners)
 			}
 		})
 	}

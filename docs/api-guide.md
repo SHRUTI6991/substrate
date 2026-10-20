@@ -675,7 +675,7 @@ Query the physical resource pool.
 
 ate-api-server mints credentials that identify an actor to services outside Substrate. They name the logical actor, so they stay the same as the actor moves between workers. This is distinct from the `actorMetadata` data source described under [SystemInfo Volumes](#systeminfo-volumes), which only tells an actor its own identity fields (name, atespace, uid).
 
-Both RPCs are on `ateapi.Control`. With authorization on, as ate-setup installs it by default, only the egress gateway may call them; see [authorization.md](authorization.md). It calls `MintActorJwt` when an egress policy injects an actor JWT into a request.
+Both RPCs are on `ateapi.Control`. Only the egress gateway may call them; see [authorization.md](authorization.md). It calls `MintActorJwt` when an egress policy injects an actor JWT into a request.
 
 ### `MintActorJwt`
 
